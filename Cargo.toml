@@ -3,6 +3,12 @@ name = "pico2-quick"
 version = "0.2.0"
 edition = "2024"
 
+[[bin]]
+name = "pico2-quick"
+path = "src/main.rs"
+test = false
+harness = false
+
 [dependencies]
 embassy-executor = { version = "0.9", features = [
   "arch-cortex-m",
