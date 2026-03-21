@@ -10,15 +10,14 @@ test = false
 harness = false
 
 [dependencies]
-embassy-executor = { version = "0.9", features = [
-  "arch-cortex-m",
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", features = [
+  "platform-cortex-m",
   "executor-thread",
-  "defmt",
+  "log",
 ] }
-panic-probe = { version = "1.0", features = ["print-defmt"] }
-embassy-time = { version = "0.5.0" }
-embassy-rp = { version = "0.9.0", features = [
-  "defmt",
+panic-halt = "0.2"
+embassy-time = { git = "https://github.com/embassy-rs/embassy" }
+embassy-rp = { git = "https://github.com/embassy-rs/embassy", features = [
   "time-driver",
   "critical-section-impl",
   "rp235xa",
@@ -28,6 +27,9 @@ embassy-rp = { version = "0.9.0", features = [
 cortex-m = { version = "0.7.6" }
 cortex-m-rt = "0.7.5"
 
-defmt = "1.0.1"
-defmt-rtt = "1.0"
+log = "0.4"
 micromath = "2.1.0"
+embassy-usb = { git = "https://github.com/embassy-rs/embassy" }
+embassy-usb-logger = { git = "https://github.com/embassy-rs/embassy" }
+static_cell = "2.1"
+
