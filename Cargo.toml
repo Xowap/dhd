@@ -30,3 +30,4 @@ cortex-m-rt = "0.7.5"
 
 defmt = "1.0.1"
 defmt-rtt = "1.0"
+micromath = "2.1.0"
