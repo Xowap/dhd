@@ -1,9 +1,12 @@
-//! This example demonstrates a dependency-injection-based architecture for an embedded system.
+//! DHD (Dial Hifi Device)
 //!
-//! Rather than relying on global state or hard-coded peripheral access, this design uses
-//! the `main` entry point to initialize hardware and shared resources. These resources are
-//! then explicitly injected into distinct component structs, ensuring that every part of
-//! the system has clear ownership and access only to the data it requires to function.
+//! A physical media controller for computers, providing tactile control over volume
+//! and media playback with future support for haptic feedback.
+//!
+//! This firmware implements a dependency-injection-based architecture. Hardware sensors
+//! (like the potentiometer) are sampled in dedicated tasks and publish their state to
+//! shared atomic storage. Other tasks, such as the system monitor or future HID reports,
+//! consume this data to interact with the host computer.
 
 #![no_std]
 #![no_main]
@@ -11,67 +14,68 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use log::info;
 use embassy_executor::Spawner;
+use embassy_rp::adc::{Adc, Channel, Config as AdcConfig, InterruptHandler as AdcInterruptHandler, Async};
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::USB;
-use embassy_rp::usb::{Driver, InterruptHandler};
-use embassy_time::{Duration, Instant, Ticker, Timer};
-use micromath::F32Ext;
+use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
+use embassy_time::{Duration, Ticker, Timer};
 use static_cell::StaticCell;
 use {panic_halt as _};
 
 bind_interrupts!(struct Irqs {
-    USBCTRL_IRQ => InterruptHandler<USB>;
+    USBCTRL_IRQ => UsbInterruptHandler<USB>;
+    ADC_IRQ_FIFO => AdcInterruptHandler;
 });
 
 /// Program metadata for `picotool info`.
 #[unsafe(link_section = ".bi_entries")]
 #[used]
 pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
-    embassy_rp::binary_info::rp_program_name!(c"LedManager DI Example"),
+    embassy_rp::binary_info::rp_program_name!(c"DHD - Dial Hifi Device"),
     embassy_rp::binary_info::rp_program_description!(
-        c"LedManager with Dependency Injection and USB Logging"
+        c"Physical media controller with haptic volume feedback"
     ),
     embassy_rp::binary_info::rp_cargo_version!(),
     embassy_rp::binary_info::rp_program_build_attribute!(),
 ];
 
-/// The `LedManager` acts as the single source of truth for the system's target LED state.
+/// The `VolumeState` acts as the single source of truth for the device's current volume level.
 ///
-/// It facilitates communication between the controller (which determines the desired brightness)
-/// and the blinker (which applies that brightness). By using atomic operations, it allows
-/// these two tasks to interact safely without the overhead of a mutex, keeping the control
-/// loop responsive.
-struct LedManager {
-    /// Intensity stored as parts per million (0 to 1,000,000).
+/// It facilitates communication between the sensor manager (which samples the physical dial)
+/// and the system observers (monitor, HID reports). By using atomic operations, it allows
+/// these tasks to interact safely without the overhead of a mutex, keeping the data
+/// flow responsive and thread-safe across the async executor.
+struct VolumeState {
+    /// Volume stored as parts per million (0 to 1,000,000).
     /// Atomic storage ensures we can update and read the intensity across different
     /// execution contexts without data races.
-    intensity: AtomicU32,
+    raw_ppm: AtomicU32,
 }
 
-impl LedManager {
-    /// Creates a new `LedManager` instance in its default state (LED off).
+impl VolumeState {
+    /// Creates a new `VolumeState` instance initialized to zero.
     const fn new() -> Self {
         Self {
-            intensity: AtomicU32::new(0),
+            raw_ppm: AtomicU32::new(0),
         }
     }
 
-    /// Sets the desired LED intensity.
+    /// Sets the current volume level.
     ///
-    /// This is typically called by a "driver" or "controller" component to communicate
-    /// a new state to the hardware-facing tasks.
-    fn set_intensity(&self, val: f32) {
+    /// This is called by sensor drivers like `PotentiometerManager` to publish
+    /// new data read from the physical dial.
+    fn set(&self, val: f32) {
         let val = (val.clamp(0.0, 1.0) * 1_000_000.0) as u32;
-        self.intensity.store(val, Ordering::Relaxed);
+        self.raw_ppm.store(val, Ordering::Relaxed);
     }
 
-    /// Returns the current desired LED intensity.
+    /// Returns the current volume level.
     ///
-    /// This is used by the blinker task to determine its duty cycle and by the monitor
-    /// task to report current status.
-    fn get_intensity(&self) -> f32 {
-        self.intensity.load(Ordering::Relaxed) as f32 / 1_000_000.0
+    /// This is used by observers like the `Monitor` task to retrieve the latest
+    /// volume state for diagnostics or computer communication.
+    fn get(&self) -> f32 {
+        self.raw_ppm.load(Ordering::Relaxed) as f32 / 1_000_000.0
     }
 }
 
@@ -99,111 +103,97 @@ impl UsbLogger {
     }
 }
 
-/// `LedBlinker` is the hardware driver responsible for physical LED control.
+/// `PotentiometerManager` handles reading the analog value from the physical DHD dial.
 ///
-/// It implements a software-based PWM (Pulse Width Modulation) loop. By injecting the
-/// `LedManager` reference, it remains decoupled from the logic that decides *how* bright
-/// the LED should be, focusing entirely on *how* to achieve that brightness on the pin.
-struct LedBlinker {
-    led: Output<'static>,
-    manager: &'static LedManager,
+/// It acts as a hardware sensor driver that periodically samples the ADC and translates
+/// the raw voltage into a normalized float. By updating the `VolumeState`, it
+/// provides a bridge between physical user interaction and the rest of the DHD's
+/// logic, enabling the device to track knob movement in real-time.
+struct PotentiometerManager {
+    adc: Adc<'static, Async>,
+    channel: Channel<'static>,
+    state: &'static VolumeState,
+    interval: Duration,
+    bottom: f32,
+    top: f32,
 }
 
-impl LedBlinker {
-    /// Pairs a physical GPIO pin with a shared `LedManager` state.
-    fn new(led: Output<'static>, manager: &'static LedManager) -> Self {
-        Self { led, manager }
-    }
-
-    /// Executes the software PWM loop.
+impl PotentiometerManager {
+    /// Creates a new `PotentiometerManager` with the specified calibration and timing.
     ///
-    /// This runs at a high frequency to simulate analog dimming. It continuously polls
-    /// the injected `LedManager` for the current target intensity.
-    async fn run(mut self) {
-        loop {
-            let intensity = self.manager.get_intensity();
-
-            if intensity <= 0.0 {
-                self.led.set_low();
-                Timer::after_millis(10).await;
-            } else if intensity >= 1.0 {
-                self.led.set_high();
-                Timer::after_millis(10).await;
-            } else {
-                let on_time_us = (intensity * 1000.0) as u64; 
-                let off_time_us = 1000 - on_time_us;
-
-                if on_time_us > 0 {
-                    self.led.set_high();
-                    Timer::after_micros(on_time_us).await;
-                }
-                if off_time_us > 0 {
-                    self.led.set_low();
-                    Timer::after_micros(off_time_us).await;
-                }
-            }
+    /// * `adc`: The initialized ADC peripheral.
+    /// * `channel`: The specific ADC channel (GP26) connected to the dial wiper.
+    /// * `state`: The `VolumeState` to update with new readings.
+    /// * `interval`: How often to sample the hardware.
+    /// * `bottom`: Clipping level for the low end (clamped to 0.0 below this).
+    /// * `top`: Clipping level for the high end (clamped to 1.0 above this).
+    fn new(
+        adc: Adc<'static, Async>,
+        channel: Channel<'static>,
+        state: &'static VolumeState,
+        interval: Duration,
+        bottom: f32,
+        top: f32,
+    ) -> Self {
+        Self {
+            adc,
+            channel,
+            state,
+            interval,
+            bottom,
+            top,
         }
     }
-}
 
-/// `DimController` manages the behavioral logic of the LED.
-///
-/// It calculates a sinusoidal intensity curve over time. By injecting the `LedManager`,
-/// this component doesn't need to know anything about GPIO pins or PWM; it simply
-/// updates the shared state with its calculated values.
-struct DimController {
-    manager: &'static LedManager,
-}
-
-impl DimController {
-    /// Injects the shared state that this controller will manipulate.
-    fn new(manager: &'static LedManager) -> Self {
-        Self { manager }
-    }
-
-    /// Drives the intensity following a mathematical sinusoid.
+    /// Continuously polls the ADC and updates the shared volume state.
     ///
-    /// This task updates the intensity at a fixed frequency (50Hz), providing smooth
-    /// transitions independent of the LED hardware implementation.
-    async fn run(self) {
-        let mut ticker = Ticker::every(Duration::from_millis(20));
-        let start = Instant::now();
-        let period_secs = 5.0;
-
+    /// This loop converts the raw 12-bit ADC range into a normalized 0.0..1.0 range,
+    /// applying the configured clipping to handle noise at the potentiometers' limits.
+    async fn run(mut self) {
+        let mut ticker = Ticker::every(self.interval);
         loop {
-            let elapsed = start.elapsed();
-            let elapsed_secs = elapsed.as_millis() as f32 / 1000.0;
-            let sin_val = (elapsed_secs * 2.0 * core::f32::consts::PI / period_secs).sin();
-            let intensity = (sin_val + 1.0) / 2.0;
-            
-            self.manager.set_intensity(intensity);
-            
+            if let Ok(raw_val) = self.adc.read(&mut self.channel).await {
+                // RP2350 ADC is 12-bit (0-4095)
+                let val = raw_val as f32 / 4095.0;
+
+                // Apply clipping and normalize to 0..1 range within the clipped window
+                let normalized = if val <= self.bottom {
+                    0.0
+                } else if val >= self.top {
+                    1.0
+                } else {
+                    (val - self.bottom) / (self.top - self.bottom)
+                };
+
+                self.state.set(normalized);
+            }
             ticker.next().await;
         }
     }
 }
 
-/// `Monitor` provides system observability and diagnostics.
+/// `Monitor` provides system observability and diagnostics for the DHD.
 ///
-/// It periodically reads the shared system state and reports it via the logging system.
-/// This allows us to verify the system behavior without impacting the core control loop.
+/// It periodically reads the shared volume state and reports it via the USB logging system.
+/// This allows us to verify dial calibration and responsiveness in real-time
+/// without impacting the high-frequency sampling loops.
 struct Monitor {
-    manager: &'static LedManager,
+    state: &'static VolumeState,
 }
 
 impl Monitor {
     /// Injects the shared state that this monitor will observe.
-    fn new(manager: &'static LedManager) -> Self {
-        Self { manager }
+    fn new(state: &'static VolumeState) -> Self {
+        Self { state }
     }
 
-    /// Periodically logs the current system intensity.
+    /// Periodically logs the current volume level.
     async fn run(self) {
         let mut ticker = Ticker::every(Duration::from_secs(1));
         loop {
             ticker.next().await;
-            let intensity = self.manager.get_intensity();
-            info!("Current LED intensity: {}", intensity);
+            let current = self.state.get();
+            info!("DHD Volume: {:.3}", current);
         }
     }
 }
@@ -215,18 +205,11 @@ async fn usb_logger_task(logger: UsbLogger) {
     logger.run().await;
 }
 
-/// Embassy task wrapper for the LED Blink loop.
+/// Embassy task wrapper for the Potentiometer polling loop.
 /// This exists to adapt the struct-based runner to the executor's task requirements.
 #[embassy_executor::task]
-async fn led_blinker_task(blinker: LedBlinker) {
-    blinker.run().await;
-}
-
-/// Embassy task wrapper for the Sinusoidal Intensity Controller.
-/// This exists to adapt the struct-based runner to the executor's task requirements.
-#[embassy_executor::task]
-async fn dim_controller_task(controller: DimController) {
-    controller.run().await;
+async fn potentiometer_task(manager: PotentiometerManager) {
+    manager.run().await;
 }
 
 /// Embassy task wrapper for the System Monitor.
@@ -236,12 +219,7 @@ async fn monitor_task(monitor: Monitor) {
     monitor.run().await;
 }
 
-/// The main entry point responsible for system orchestration and dependency injection.
-///
-/// Here, we initialize the hardware, create shared system-wide resources (like the `LedManager`),
-/// and assemble the components by injecting their dependencies. This centralized setup
-/// ensures that the application architecture is visible at a glance and that no component
-/// creates its own hidden dependencies.
+/// The main entry point responsible for DHD system orchestration and dependency injection.
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
@@ -251,28 +229,37 @@ async fn main(spawner: Spawner) {
     let logger = UsbLogger::new(driver);
     spawner.spawn(usb_logger_task(logger).unwrap());
 
-    // LedManager is allocated in a StaticCell to provide a 'static reference that can
+    // Volume state is allocated in a StaticCell to provide a 'static reference that can
     // be shared safely between multiple tasks.
-    static LED_MANAGER: StaticCell<LedManager> = StaticCell::new();
-    let manager = LED_MANAGER.init(LedManager::new());
+    static VOLUME_STATE: StaticCell<VolumeState> = StaticCell::new();
+    let volume = VOLUME_STATE.init(VolumeState::new());
 
     // Delay to allow the USB device to enumerate on the host machine.
-    Timer::after_millis(500).await;
+    Timer::after_millis(1000).await;
     
-    info!("LedManager Struct-based DI started");
+    info!("DHD (Dial Hifi Device) starting...");
 
-    // Initialize hardware pin as a dependency.
-    let led = Output::new(p.PIN_25, Level::Low);
+    // Initialize status LED: Always on to indicate device power.
+    let mut led = Output::new(p.PIN_25, Level::High);
+    led.set_high();
+    
+    // ADC setup: GP26 (Pin 31) is configured for analog input from the dial.
+    let adc = Adc::new(p.ADC, Irqs, AdcConfig::default());
+    let channel = Channel::new_pin(p.PIN_26, embassy_rp::gpio::Pull::None);
 
     // Dependency Injection: Component assembly.
-    // We explicitly pass shared state and hardware ownership to the relevant objects.
-    let blinker = LedBlinker::new(led, manager);
-    let dim_controller = DimController::new(manager);
-    let monitor = Monitor::new(manager);
+    let pot_manager = PotentiometerManager::new(
+        adc,
+        channel,
+        volume,
+        Duration::from_millis(50),
+        0.02,
+        0.98,
+    );
+    let monitor = Monitor::new(volume);
 
     // Final hand-off to the async executor.
-    spawner.spawn(led_blinker_task(blinker).unwrap());
-    spawner.spawn(dim_controller_task(dim_controller).unwrap());
+    spawner.spawn(potentiometer_task(pot_manager).unwrap());
     spawner.spawn(monitor_task(monitor).unwrap());
 
     // The main task yields control to the other tasks indefinitely.

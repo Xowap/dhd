@@ -1,10 +1,10 @@
 [package]
-name = "pico2-quick"
-version = "0.2.0"
+name = "dhd"
+version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "pico2-quick"
+name = "dhd"
 path = "src/main.rs"
 test = false
 harness = false
