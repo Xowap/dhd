@@ -109,16 +109,21 @@ impl UsbLogger {
 /// the raw voltage into a normalized float. By updating the `VolumeState`, it
 /// provides a bridge between physical user interaction and the rest of the DHD's
 /// logic, enabling the device to track knob movement in real-time.
-struct PotentiometerManager {
+struct PotentiometerManager<const N: usize> {
     adc: Adc<'static, Async>,
     channel: Channel<'static>,
     state: &'static VolumeState,
     interval: Duration,
     bottom: f32,
     top: f32,
+    buffer: [u16; N],
+    index: usize,
+    count: usize,
+    hysteresis_band: u16,
+    last_stable_val: Option<u16>,
 }
 
-impl PotentiometerManager {
+impl<const N: usize> PotentiometerManager<N> {
     /// Creates a new `PotentiometerManager` with the specified calibration and timing.
     ///
     /// * `adc`: The initialized ADC peripheral.
@@ -127,6 +132,7 @@ impl PotentiometerManager {
     /// * `interval`: How often to sample the hardware.
     /// * `bottom`: Clipping level for the low end (clamped to 0.0 below this).
     /// * `top`: Clipping level for the high end (clamped to 1.0 above this).
+    /// * `hysteresis_band`: The hysteresis band in LSB.
     fn new(
         adc: Adc<'static, Async>,
         channel: Channel<'static>,
@@ -134,6 +140,7 @@ impl PotentiometerManager {
         interval: Duration,
         bottom: f32,
         top: f32,
+        hysteresis_band: u16,
     ) -> Self {
         Self {
             adc,
@@ -142,19 +149,50 @@ impl PotentiometerManager {
             interval,
             bottom,
             top,
+            buffer: [0; N],
+            index: 0,
+            count: 0,
+            hysteresis_band,
+            last_stable_val: None,
         }
     }
 
     /// Continuously polls the ADC and updates the shared volume state.
     ///
     /// This loop converts the raw 12-bit ADC range into a normalized 0.0..1.0 range,
-    /// applying the configured clipping to handle noise at the potentiometers' limits.
+    /// applying a median filter and hysteresis to ensure smooth updates.
     async fn run(mut self) {
         let mut ticker = Ticker::every(self.interval);
         loop {
             if let Ok(raw_val) = self.adc.read(&mut self.channel).await {
+                // Add to circular buffer for median filter
+                self.buffer[self.index] = raw_val;
+                self.index = (self.index + 1) % N;
+                if self.count < N {
+                    self.count += 1;
+                }
+
+                // Calculate median
+                let mut sort_buf = [0u16; N];
+                sort_buf[..self.count].copy_from_slice(&self.buffer[..self.count]);
+                sort_buf[..self.count].sort_unstable();
+                let median_val = sort_buf[self.count / 2];
+
+                // Apply hysteresis
+                let stable_val = if let Some(last) = self.last_stable_val {
+                    if (median_val as i32 - last as i32).abs() > self.hysteresis_band as i32 {
+                        self.last_stable_val = Some(median_val);
+                        median_val
+                    } else {
+                        last
+                    }
+                } else {
+                    self.last_stable_val = Some(median_val);
+                    median_val
+                };
+
                 // RP2350 ADC is 12-bit (0-4095)
-                let val = raw_val as f32 / 4095.0;
+                let val = stable_val as f32 / 4095.0;
 
                 // Apply clipping and normalize to 0..1 range within the clipped window
                 let normalized = if val <= self.bottom {
@@ -212,7 +250,7 @@ async fn usb_logger_task(logger: UsbLogger) {
 /// Embassy task wrapper for the Potentiometer polling loop.
 /// This exists to adapt the struct-based runner to the executor's task requirements.
 #[embassy_executor::task]
-async fn potentiometer_task(manager: PotentiometerManager) {
+async fn potentiometer_task(manager: PotentiometerManager<15>) {
     manager.run().await;
 }
 
@@ -247,13 +285,14 @@ async fn main(spawner: Spawner) {
     let channel = Channel::new_pin(p.PIN_26, embassy_rp::gpio::Pull::None);
 
     // Dependency Injection: Component assembly.
-    let pot_manager = PotentiometerManager::new(
+    let pot_manager = PotentiometerManager::<15>::new(
         adc,
         channel,
         volume,
-        Duration::from_millis(50),
+        Duration::from_millis(2),
         0.02,
         0.98,
+        21,
     );
     let monitor = Monitor::new(volume);
 
