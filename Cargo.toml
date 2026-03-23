@@ -23,6 +23,7 @@ embassy-rp = { git = "https://github.com/embassy-rs/embassy", features = [
   "rp235xa",
   "binary-info",
 ] }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
 
 cortex-m = { version = "0.7.6" }
 cortex-m-rt = "0.7.5"

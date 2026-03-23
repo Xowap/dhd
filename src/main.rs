@@ -12,6 +12,8 @@
 #![no_main]
 
 use core::sync::atomic::{AtomicU32, Ordering};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
 use log::info;
 use embassy_executor::Spawner;
 use embassy_rp::adc::{Adc, Channel, Config as AdcConfig, InterruptHandler as AdcInterruptHandler, Async};
@@ -121,6 +123,7 @@ struct PotentiometerManager<const N: usize> {
     count: usize,
     hysteresis_band: u16,
     last_stable_val: Option<u16>,
+    on_change: &'static Signal<CriticalSectionRawMutex, ()>,
 }
 
 impl<const N: usize> PotentiometerManager<N> {
@@ -133,6 +136,7 @@ impl<const N: usize> PotentiometerManager<N> {
     /// * `bottom`: Clipping level for the low end (clamped to 0.0 below this).
     /// * `top`: Clipping level for the high end (clamped to 1.0 above this).
     /// * `hysteresis_band`: The hysteresis band in LSB.
+    /// * `on_change`: A signal used to notify other tasks when the value changes.
     fn new(
         adc: Adc<'static, Async>,
         channel: Channel<'static>,
@@ -141,6 +145,7 @@ impl<const N: usize> PotentiometerManager<N> {
         bottom: f32,
         top: f32,
         hysteresis_band: u16,
+        on_change: &'static Signal<CriticalSectionRawMutex, ()>,
     ) -> Self {
         Self {
             adc,
@@ -154,6 +159,7 @@ impl<const N: usize> PotentiometerManager<N> {
             count: 0,
             hysteresis_band,
             last_stable_val: None,
+            on_change,
         }
     }
 
@@ -179,15 +185,18 @@ impl<const N: usize> PotentiometerManager<N> {
                 let median_val = sort_buf[self.count / 2];
 
                 // Apply hysteresis
+                let mut changed = false;
                 let stable_val = if let Some(last) = self.last_stable_val {
                     if (median_val as i32 - last as i32).abs() > self.hysteresis_band as i32 {
                         self.last_stable_val = Some(median_val);
+                        changed = true;
                         median_val
                     } else {
                         last
                     }
                 } else {
                     self.last_stable_val = Some(median_val);
+                    changed = true;
                     median_val
                 };
 
@@ -203,7 +212,10 @@ impl<const N: usize> PotentiometerManager<N> {
                     (val - self.bottom) / (self.top - self.bottom)
                 };
 
-                self.state.set(normalized);
+                if changed {
+                    self.state.set(normalized);
+                    self.on_change.signal(());
+                }
             }
             ticker.next().await;
         }
@@ -212,30 +224,28 @@ impl<const N: usize> PotentiometerManager<N> {
 
 /// `Monitor` provides system observability and diagnostics for the DHD.
 ///
-/// It periodically reads the shared volume state and reports it via the USB logging system.
-/// This allows us to verify dial calibration and responsiveness in real-time
-/// without impacting the high-frequency sampling loops.
+/// It listens for changes in the potentiometer and reports the new volume state.
 struct Monitor {
     state: &'static VolumeState,
+    on_change: &'static Signal<CriticalSectionRawMutex, ()>,
 }
 
 impl Monitor {
-    /// Injects the shared state that this monitor will observe.
-    fn new(state: &'static VolumeState) -> Self {
-        Self { state }
+    /// Injects the shared state and change signal that this monitor will observe.
+    fn new(state: &'static VolumeState, on_change: &'static Signal<CriticalSectionRawMutex, ()>) -> Self {
+        Self { state, on_change }
     }
 
-    /// Periodically logs the current volume level.
+    /// Logs the volume level whenever a change occurs.
     async fn run(self) {
         // Delay to allow the USB device to enumerate on the host machine before we start logging.
         Timer::after_secs(1).await;
         info!("DHD (Dial Hifi Device) starting...");
 
-        let mut ticker = Ticker::every(Duration::from_secs(1));
         loop {
-            ticker.next().await;
+            self.on_change.wait().await;
             let current = self.state.get();
-            info!("DHD Volume: {:.3}", current);
+            info!("DHD Volume changed: {:.3}", current);
         }
     }
 }
@@ -284,6 +294,10 @@ async fn main(spawner: Spawner) {
     let adc = Adc::new(p.ADC, Irqs, AdcConfig::default());
     let channel = Channel::new_pin(p.PIN_26, embassy_rp::gpio::Pull::None);
 
+    // Create a signal to notify the monitor when the potentiometer value changes.
+    static POT_CHANGE_SIGNAL: StaticCell<Signal<CriticalSectionRawMutex, ()>> = StaticCell::new();
+    let on_change = POT_CHANGE_SIGNAL.init(Signal::new());
+
     // Dependency Injection: Component assembly.
     let pot_manager = PotentiometerManager::<15>::new(
         adc,
@@ -293,8 +307,9 @@ async fn main(spawner: Spawner) {
         0.02,
         0.98,
         21,
+        on_change,
     );
-    let monitor = Monitor::new(volume);
+    let monitor = Monitor::new(volume, on_change);
 
     // Final hand-off to the async executor.
     spawner.spawn(potentiometer_task(pot_manager).unwrap());
