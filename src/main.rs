@@ -189,6 +189,10 @@ impl Monitor {
 
     /// Periodically logs the current volume level.
     async fn run(self) {
+        // Delay to allow the USB device to enumerate on the host machine before we start logging.
+        Timer::after_secs(1).await;
+        info!("DHD (Dial Hifi Device) starting...");
+
         let mut ticker = Ticker::every(Duration::from_secs(1));
         loop {
             ticker.next().await;
@@ -233,11 +237,6 @@ async fn main(spawner: Spawner) {
     // be shared safely between multiple tasks.
     static VOLUME_STATE: StaticCell<VolumeState> = StaticCell::new();
     let volume = VOLUME_STATE.init(VolumeState::new());
-
-    // Delay to allow the USB device to enumerate on the host machine.
-    Timer::after_millis(1000).await;
-    
-    info!("DHD (Dial Hifi Device) starting...");
 
     // Initialize status LED: Always on to indicate device power.
     let mut led = Output::new(p.PIN_25, Level::High);
