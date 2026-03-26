@@ -31,23 +31,41 @@ Sent from **Device → Host** for diagnostic purposes.
 - **Levels**: `INFO`, `WARN`, `ERROR`
 - **System Impact**: Displayed in the host terminal with appropriate color coding.
 
-### 3. Ping (`ping`)
-Sent from **Host → Device** every 2 seconds to verify the connection health.
+### 3. Handshake (`handshake`)
+Sent from **Host → Device** immediately after connection to verify the device type and firmware version.
+
+- **Payload**:
+  ```json
+  {"handshake": {"message": "Tek'ma'te Teal'c"}}
+  ```
+- **System Impact**: The device must respond with the correct reply message to confirm its identity. If the host does not receive the expected reply within 2 seconds, it will disconnect and retry.
+
+### 4. Handshake Response (`handshake`)
+Sent from **Device → Host** in response to a host handshake challenge.
+
+- **Payload**:
+  ```json
+  {"handshake": {"message": "Tek'ma'te Bra'tac"}}
+  ```
+- **System Impact**: Completes the initial connection phase and allows the host to start processing volume and log messages.
+
+### 5. Ping (`ping`)
+Sent from **Host → Device** every 1 second to verify the connection health.
 
 - **Payload**:
   ```json
   {"ping": {"timestamp": 1711468800000}}
   ```
-- **System Impact**: The device must respond immediately with a `pong`.
+- **System Impact**: The device must respond immediately with a `pong`. If the host misses 3 consecutive pings (3 seconds total), it considers the connection dead and initiates a reconnection.
 
-### 4. Pong (`pong`)
+### 6. Pong (`pong`)
 Sent from **Device → Host** in response to a `ping`.
 
 - **Payload**:
   ```json
   {"pong": {"timestamp": 1711468800000}}
   ```
-- **System Impact**: The host verifies that the timestamp matches the last sent `ping` to confirm the round-trip link is healthy.
+- **System Impact**: The host verifies that the timestamp matches the last sent `ping` to confirm the round-trip link is healthy. Successful pong resets the "missed pings" counter to 0.
 
 ## Communication Sequences
 
@@ -76,23 +94,25 @@ sequenceDiagram
     participant Host as dhd Host Tool
     participant Device as DHD Firmware
 
-    loop Every 2 Seconds
+    loop Every 1 Second
         Host->>Device: {"ping": {"timestamp": 12345}}
         Device-->>Host: {"pong": {"timestamp": 12345}}
-        Host->>Host: Verify health status
+        Note right of Host: Missed 3? Reconnect.
     end
 ```
 
-### Initialization & Logging
-On boot, the device sends its status to the host.
+### Initialization & Handshake
+On boot and connection, the host and device perform a handshake to ensure compatibility.
 
 ```mermaid
 sequenceDiagram
-    participant Device as DHD Firmware
     participant Host as dhd Host Tool
+    participant Device as DHD Firmware
 
+    Host->>Device: {"handshake": {"message": "Tek'ma'te Teal'c"}}
+    Device-->>Host: {"handshake": {"message": "Tek'ma'te Bra'tac"}}
+    Note over Host,Device: Connection Established
+    
     Device->>Host: {"log": {"level": "INFO", "message": "Booting..."}}
-    Host->>Host: Display Log
-    Device->>Host: {"log": {"level": "INFO", "message": "ADC Ready"}}
     Host->>Host: Display Log
 ```

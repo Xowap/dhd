@@ -31,6 +31,12 @@ pub enum OutgoingMessage {
         /// The timestamp received in the original Ping.
         timestamp: u64,
     },
+    /// Handshake response for device identification.
+    #[serde(rename = "handshake")]
+    Handshake {
+        /// The response message.
+        message: heapless::String<32>,
+    },
 }
 
 /// Messages received by the device from the host.
@@ -41,5 +47,11 @@ pub enum IncomingMessage {
     Ping {
         /// An arbitrary timestamp to be echoed back in the Pong.
         timestamp: u64,
+    },
+    /// Initial handshake to verify device type.
+    #[serde(rename = "handshake")]
+    Handshake {
+        /// The handshake message.
+        message: heapless::String<32>,
     },
 }

@@ -304,8 +304,18 @@ async fn run_serial(class: &mut CdcAcmClass<'static, Driver<'static, USB>>) -> R
             embassy_futures::select::Either::First(read_res) => {
                 let size = read_res?;
                 let data = &buf[..size];
-                if let Ok((IncomingMessage::Ping { timestamp }, _)) = serde_json_core::from_slice::<IncomingMessage>(data) {
-                    let _ = OUTGOING_CHANNEL.try_send(OutgoingMessage::Pong { timestamp });
+                match serde_json_core::from_slice::<IncomingMessage>(data) {
+                    Ok((IncomingMessage::Ping { timestamp }, _)) => {
+                        let _ = OUTGOING_CHANNEL.try_send(OutgoingMessage::Pong { timestamp });
+                    }
+                    Ok((IncomingMessage::Handshake { message }, _)) => {
+                        if message == "Tek'ma'te Teal'c" {
+                            let mut resp = String::new();
+                            let _ = core::fmt::write(&mut resp, format_args!("Tek'ma'te Bra'tac"));
+                            let _ = OUTGOING_CHANNEL.try_send(OutgoingMessage::Handshake { message: resp });
+                        }
+                    }
+                    _ => {}
                 }
             }
             embassy_futures::select::Either::Second(msg) => {

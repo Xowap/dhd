@@ -120,7 +120,8 @@ async fn main() -> Result<()> {
         match find_and_connect() {
             Ok(stream) => {
                 println!("{}", "Connected to DHD device!".green());
-                if let Err(e) = run_host(stream, pulse.clone()).await {
+                let framed = Framed::new(stream, LinesCodec::new());
+                if let Err(e) = run_host(framed, pulse.clone()).await {
                     eprintln!("{} {}", "Connection lost:".red(), e);
                 }
             }
@@ -149,16 +150,53 @@ fn find_and_connect() -> Result<SerialStream> {
 
 /// Main communication loop for an active connection.
 async fn run_host(
-    stream: SerialStream,
+    mut framed: Framed<SerialStream, LinesCodec>,
     pulse: Option<Arc<Mutex<PulseController>>>,
 ) -> Result<()> {
-    let mut framed = Framed::new(stream, LinesCodec::new());
-    let mut ping_interval = interval(Duration::from_secs(2));
+    // Initial handshake
+    let handshake = IncomingMessage::Handshake {
+        message: "Tek'ma'te Teal'c".parse().unwrap(),
+    };
+    let j = serde_json::to_string(&handshake)?;
+    framed.send(j).await?;
+
+    loop {
+        match tokio::time::timeout(Duration::from_secs(2), framed.next()).await {
+            Ok(Some(Ok(line))) => {
+                let msg: OutgoingMessage = serde_json::from_str(&line)?;
+                match msg {
+                    OutgoingMessage::Handshake { message } => {
+                        if message != "Tek'ma'te Bra'tac" {
+                            return Err(anyhow::anyhow!("Handshake mismatch: {}", message));
+                        }
+                        println!("{}", "Handshake successful!".green());
+                        break;
+                    }
+                    OutgoingMessage::Log { .. } | OutgoingMessage::Volume { .. } => {
+                        handle_message(msg, pulse.as_ref());
+                    }
+                    OutgoingMessage::Pong { .. } => {
+                        // Ignore pongs during handshake phase
+                    }
+                }
+            }
+            Ok(None) | Ok(Some(Err(_))) | Err(_) => {
+                return Err(anyhow::anyhow!("Handshake timeout or error"));
+            }
+        }
+    }
+
+    let mut ping_interval = interval(Duration::from_secs(1));
     let mut ping_timestamp: u64 = 0;
+    let mut missed_pings = 0;
 
     loop {
         tokio::select! {
             _ = ping_interval.tick() => {
+                if missed_pings >= 3 {
+                    return Err(anyhow::anyhow!("Connection dead: 3 pings missed"));
+                }
+
                 ping_timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)?
                     .as_millis() as u64;
@@ -167,6 +205,7 @@ async fn run_host(
                 };
                 let j = serde_json::to_string(&ping)?;
                 framed.send(j).await?;
+                missed_pings += 1;
             }
             line = framed.next() => {
                 let line = match line {
@@ -181,7 +220,15 @@ async fn run_host(
                 }
 
                 match serde_json::from_str::<OutgoingMessage>(line) {
-                    Ok(msg) => handle_message(msg, ping_timestamp, pulse.as_ref()),
+                    Ok(msg) => {
+                        if let OutgoingMessage::Pong { timestamp } = msg {
+                            if timestamp == ping_timestamp {
+                                missed_pings = 0;
+                            }
+                        } else {
+                            handle_message(msg, pulse.as_ref());
+                        }
+                    }
                     Err(e) => {
                         if line.contains('{') {
                             eprintln!(
@@ -201,7 +248,6 @@ async fn run_host(
 /// Dispatches an incoming `OutgoingMessage` to the appropriate display logic.
 fn handle_message(
     msg: OutgoingMessage,
-    last_ping_ts: u64,
     pulse: Option<&Arc<Mutex<PulseController>>>,
 ) {
     let now = Local::now().format("%H:%M:%S%.3f").to_string().dimmed();
@@ -233,10 +279,9 @@ fn handle_message(
             };
             println!("{} [{}] [{}] {}", now, "LOG".white().bold(), lvl, message);
         }
-        OutgoingMessage::Pong { timestamp } => {
-            if timestamp == last_ping_ts {
-                println!("{} [{}] healthy", now, "HEALTH".cyan().bold());
-            }
+        OutgoingMessage::Pong { .. } => {}
+        OutgoingMessage::Handshake { message } => {
+            println!("{} [{}] Unexpected handshake response: {}", now, "HEALTH".yellow().bold(), message);
         }
     }
 }
