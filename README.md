@@ -43,7 +43,9 @@ cargo run -p dhd
 
 ## Features
 
+- **System Audio Integration**: Automatically synchronizes with PulseAudio/PipeWire, providing precise control over the host's default audio sink.
 - **Responsive Volume Control**: Uses ADC sampling with median filtering and hysteresis for a smooth, jitter-free experience.
+- **Event-Driven Architecture**: The host tool uses an asynchronous, non-blocking design (Tokio) to ensure low latency and minimal CPU usage.
 - **Auto-Discovery**: The host tool automatically scans USB ports and reconnects to the device if it's unplugged.
 - **JSON Protocol**: Bi-directional communication allowing for complex commands and telemetry.
 - **Remote Logging**: Device logs are sent as JSON over USB and rendered clearly in the host terminal.
