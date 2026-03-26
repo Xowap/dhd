@@ -1,36 +1,7 @@
-[package]
-name = "dhd"
-version = "0.1.0"
-edition = "2024"
-
-[[bin]]
-name = "dhd"
-path = "src/main.rs"
-test = false
-harness = false
-
-[dependencies]
-embassy-executor = { git = "https://github.com/embassy-rs/embassy", features = [
-  "platform-cortex-m",
-  "executor-thread",
-  "log",
-] }
-panic-halt = "0.2"
-embassy-time = { git = "https://github.com/embassy-rs/embassy" }
-embassy-rp = { git = "https://github.com/embassy-rs/embassy", features = [
-  "time-driver",
-  "critical-section-impl",
-  "rp235xa",
-  "binary-info",
-] }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
-
-cortex-m = { version = "0.7.6" }
-cortex-m-rt = "0.7.5"
-
-log = "0.4"
-micromath = "2.1.0"
-embassy-usb = { git = "https://github.com/embassy-rs/embassy" }
-embassy-usb-logger = { git = "https://github.com/embassy-rs/embassy" }
-static_cell = "2.1"
-
+[workspace]
+members = [
+    "common",
+    "firmware",
+    "host",
+]
+resolver = "2"
