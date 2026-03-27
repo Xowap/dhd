@@ -28,11 +28,19 @@ const VID: u16 = 0x2e8a;
 /// Raspberry Pi Pico CDC-ACM Product ID.
 const PID: u16 = 0x000a;
 
+use tokio::sync::mpsc;
+
+/// PulseAudio events we want to handle.
+enum PulseEvent {
+    ServerChange,
+    SinkChange(u32),
+}
+
 #[derive(Default)]
 struct PulseCache {
     sink_index: Option<u32>,
     num_channels: u8,
-    needs_refresh: bool,
+    last_volume: ChannelVolumes,
 }
 
 /// PulseAudio controller for system volume adjustment.
@@ -50,8 +58,14 @@ struct PulseController {
 unsafe impl Send for PulseController {}
 unsafe impl Sync for PulseController {}
 
+/// Formats and prints a log message with a timestamp.
+fn log(_tag: &str, color: ColoredString, message: impl AsRef<str>) {
+    let now = Local::now().format("%H:%M:%S%.3f").to_string().dimmed();
+    println!("{} [{}] {}", now, color.bold(), message.as_ref());
+}
+
 impl PulseController {
-    fn new() -> Result<Self> {
+    fn new() -> Result<(Self, mpsc::UnboundedReceiver<PulseEvent>)> {
         let mut mainloop = Mainloop::new()
             .ok_or_else(|| anyhow::anyhow!("Failed to create PulseAudio mainloop"))?;
         
@@ -78,90 +92,111 @@ impl PulseController {
             }
         }
 
-        let cache = Arc::new(Mutex::new(PulseCache {
-            needs_refresh: true,
-            ..Default::default()
-        }));
-        let cache_clone = Arc::clone(&cache);
+        let cache = Arc::new(Mutex::new(PulseCache::default()));
+        let (tx, rx) = mpsc::unbounded_channel();
 
         mainloop.lock();
-        context.set_subscribe_callback(Some(Box::new(move |facility, _op, _index| {
+        context.set_subscribe_callback(Some(Box::new(move |facility, _op, index| {
             if let Some(Facility::Server) = facility {
-                if let Ok(mut c) = cache_clone.lock() {
-                    if !c.needs_refresh {
-                        let now = Local::now().format("%H:%M:%S%.3f").to_string().dimmed();
-                        println!("{} [{}] Default sink change detected", now, "PULSE".magenta().bold());
-                        c.needs_refresh = true;
-                    }
-                }
+                let _ = tx.send(PulseEvent::ServerChange);
+            } else if let Some(Facility::Sink) = facility {
+                let _ = tx.send(PulseEvent::SinkChange(index));
             }
         })));
 
         context.subscribe(
-            pulse::context::subscribe::InterestMaskSet::SERVER,
+            pulse::context::subscribe::InterestMaskSet::SERVER | pulse::context::subscribe::InterestMaskSet::SINK,
             |_| {}
         );
+
+        let cache_initial = Arc::clone(&cache);
+        context.introspect().get_sink_info_by_name("@DEFAULT_SINK@", move |res| {
+            if let pulse::callbacks::ListResult::Item(info) = res {
+                Self::update_cache_and_log(&cache_initial, info, "Default sink");
+            }
+        });
+
         mainloop.unlock();
 
-        Ok(Self { 
-            mainloop, 
-            context,
-            cache,
-        })
+        Ok((Self { mainloop, context, cache }, rx))
+    }
+
+    fn update_cache_and_log(cache: &Arc<Mutex<PulseCache>>, info: &pulse::context::introspect::SinkInfo, label: &str) {
+        let name = info.name.as_deref().unwrap_or("unknown");
+        let desc = info.description.as_deref().unwrap_or("no description");
+        let current_vol = info.volume.avg().0 as f32 / Volume::NORMAL.0 as f32;
+        
+        log(
+            "PULSE",
+            "PULSE".magenta(),
+            format!("{}: {} ({}) [vol: {:.3}]", label, name.cyan(), desc.italic().dimmed(), current_vol)
+        );
+
+        if let Ok(mut c) = cache.lock() {
+            c.sink_index = Some(info.index);
+            c.num_channels = info.volume.get().len() as u8;
+            c.last_volume = info.volume;
+        }
+    }
+
+    pub fn handle_event(&mut self, event: PulseEvent) {
+        self.mainloop.lock();
+        match event {
+            PulseEvent::ServerChange => {
+                let cache_inner = Arc::clone(&self.cache);
+                self.context.introspect().get_sink_info_by_name("@DEFAULT_SINK@", move |res| {
+                    if let pulse::callbacks::ListResult::Item(info) = res {
+                        Self::update_cache_and_log(&cache_inner, info, "Default sink changed");
+                    }
+                });
+            }
+            PulseEvent::SinkChange(index) => {
+                let (target_index, last_vol) = {
+                    let c = self.cache.lock().unwrap();
+                    (c.sink_index, c.last_volume)
+                };
+
+                if Some(index) == target_index {
+                    let cache_inner = Arc::clone(&self.cache);
+                    self.context.introspect().get_sink_info_by_index(index, move |res| {
+                        if let pulse::callbacks::ListResult::Item(info) = res {
+                            if info.volume != last_vol {
+                                if let Ok(mut c) = cache_inner.lock() {
+                                    if info.volume != c.last_volume {
+                                        let avg_vol = info.volume.avg().0 as f32 / Volume::NORMAL.0 as f32;
+                                        c.last_volume = info.volume;
+                                        log("PULSE", "PULSE".green(), format!("External volume change: {:.3}", avg_vol));
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
+        self.mainloop.unlock();
     }
 
     fn set_volume(&mut self, value: f32) {
-        // Map 0.0..1.0 to 0..Volume::NORMAL (100% in most UIs like KDE)
         let vol = Volume((Volume::NORMAL.0 as f32 * value) as u32);
         
         self.mainloop.lock();
         
-        let (index, n_channels, needs_refresh) = {
+        let (index, n_channels) = {
             let c = self.cache.lock().unwrap();
-            (c.sink_index, c.num_channels, c.needs_refresh)
+            (c.sink_index, c.num_channels)
         };
         
-        if needs_refresh || index.is_none() {
-            let ctx_ptr = &mut self.context as *mut Context;
-            let cache_ptr = Arc::clone(&self.cache);
-            
-            self.context.introspect().get_sink_info_by_name("@DEFAULT_SINK@", move |res| {
-                if let pulse::callbacks::ListResult::Item(info) = res {
-                    let now = Local::now().format("%H:%M:%S%.3f").to_string().dimmed();
-                    let name = info.name.as_deref().unwrap_or("unknown");
-                    let desc = info.description.as_deref().unwrap_or("no description");
-                    println!(
-                        "{} [{}] Default sink: {} ({})",
-                        now,
-                        "PULSE".magenta().bold(),
-                        name.cyan(),
-                        desc.italic().dimmed()
-                    );
-                    
-                    if let Ok(mut c) = cache_ptr.lock() {
-                        c.sink_index = Some(info.index);
-                        c.num_channels = info.volume.get().len() as u8;
-                        c.needs_refresh = false;
-                    }
-
-                    let mut new_volume = info.volume;
-                    for v in new_volume.get_mut() {
-                        *v = vol;
-                    }
-                    unsafe {
-                        (*ctx_ptr).introspect().set_sink_volume_by_index(
-                            info.index,
-                            &new_volume,
-                            None,
-                        );
-                    }
-                }
-            });
-        } else {
+        if let Some(idx) = index {
             let mut cv = ChannelVolumes::default();
             cv.set(n_channels, vol);
+            
+            if let Ok(mut c) = self.cache.lock() {
+                c.last_volume = cv;
+            }
+
             self.context.introspect().set_sink_volume_by_index(
-                index.unwrap(),
+                idx,
                 &cv,
                 None,
             );
@@ -175,25 +210,35 @@ impl PulseController {
 async fn main() -> Result<()> {
     println!("{}", "=== DHD Host Starting ===".bold().cyan());
 
-    let pulse = match PulseController::new() {
-        Ok(p) => Some(Arc::new(Mutex::new(p))),
+    let (pulse, pulse_rx) = match PulseController::new() {
+        Ok((p, rx)) => (Some(Arc::new(Mutex::new(p))), Some(rx)),
         Err(e) => {
             eprintln!(
                 "{} {}",
                 "Warning: PulseAudio connection failed:".yellow(),
                 e
             );
-            None
+            (None, None)
         }
     };
+
+    if let (Some(p), Some(mut rx)) = (pulse.clone(), pulse_rx) {
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                if let Ok(mut p_guard) = p.lock() {
+                    p_guard.handle_event(event);
+                }
+            }
+        });
+    }
 
     loop {
         match find_and_connect() {
             Ok(stream) => {
-                println!("{}", "Connected to DHD device!".green());
+                log("DEVICE", "DEVICE".green(), "Connected to DHD device!");
                 let framed = Framed::new(stream, LinesCodec::new());
                 if let Err(e) = run_host(framed, pulse.clone()).await {
-                    eprintln!("{} {}", "Connection lost:".red(), e);
+                    log("DEVICE", "DEVICE".red(), format!("Connection lost: {}", e));
                 }
             }
             Err(_) => {
@@ -240,7 +285,7 @@ async fn run_host(
                         if message != "Tek'ma'te Bra'tac" {
                             return Err(anyhow::anyhow!("Handshake mismatch: {}", message));
                         }
-                        println!("{}", "Handshake successful!".green());
+                        log("DEVICE", "DEVICE".green(), "Handshake successful!");
                         break;
                     }
                     OutgoingMessage::Log { .. } | OutgoingMessage::Volume { .. } => {
@@ -321,18 +366,11 @@ fn handle_message(
     msg: OutgoingMessage,
     pulse: Option<&Arc<Mutex<PulseController>>>,
 ) {
-    let now = Local::now().format("%H:%M:%S%.3f").to_string().dimmed();
     match msg {
         OutgoingMessage::Volume { value } => {
             let bar_len = (value * 20.0).clamp(0.0, 20.0) as usize;
             let bar = "|".repeat(bar_len) + &"-".repeat(20 - bar_len);
-            println!(
-                "{} [{}] {} {:.3}",
-                now,
-                "VOL".blue().bold(),
-                bar.blue(),
-                value
-            );
+            log("VOL", "VOL".blue(), format!("{} {:.3}", bar.blue(), value));
 
             // Update system volume
             if let Some(p) = pulse {
@@ -348,11 +386,11 @@ fn handle_message(
                 "ERROR" => "ERROR".red(),
                 _ => level.as_str().normal(),
             };
-            println!("{} [{}] [{}] {}", now, "LOG".white().bold(), lvl, message);
+            log("LOG", "LOG".white(), format!("[{}] {}", lvl, message));
         }
         OutgoingMessage::Pong { .. } => {}
         OutgoingMessage::Handshake { message } => {
-            println!("{} [{}] Unexpected handshake response: {}", now, "HEALTH".yellow().bold(), message);
+            log("HEALTH", "HEALTH".yellow(), format!("Unexpected handshake response: {}", message));
         }
     }
 }
