@@ -54,4 +54,12 @@ pub enum IncomingMessage {
         /// The handshake message.
         message: heapless::String<32>,
     },
+    /// Updates the potentiometer calibration range.
+    #[serde(rename = "update_calibration")]
+    UpdateCalibration {
+        /// Bottom clipping level (raw counts).
+        bottom: u16,
+        /// Top clipping level (raw counts).
+        top: u16,
+    },
 }

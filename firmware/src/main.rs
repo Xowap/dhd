@@ -122,68 +122,52 @@ impl log::Log for JsonLogger {
 
 static LOGGER: JsonLogger = JsonLogger;
 
-/// `PotentiometerManager` handles reading the analog value from the physical DHD dial.
+/// `PotentiometerReader` handles the raw analog sampling of the physical DHD dial.
 ///
-/// It acts as a hardware sensor driver that periodically samples the ADC and translates
-/// the raw voltage into a normalized float. By updating the `VolumeState`, it
-/// provides a bridge between physical user interaction and the rest of the DHD's
-/// logic, enabling the device to track knob movement in real-time.
-struct PotentiometerManager<const N: usize> {
+/// It periodically samples the ADC and applies a median filter and hysteresis
+/// to ensure stable readings. When a significant change in the raw value is
+/// detected, it publishes the new value to the `raw_signal`.
+struct PotentiometerReader<const N: usize> {
     adc: Adc<'static, Async>,
     channel: Channel<'static>,
-    state: &'static VolumeState,
     interval: Duration,
-    bottom: f32,
-    top: f32,
     buffer: [u16; N],
     index: usize,
     count: usize,
     hysteresis_band: u16,
     last_stable_val: Option<u16>,
-    on_change: &'static Signal<CriticalSectionRawMutex, ()>,
+    raw_signal: &'static Signal<CriticalSectionRawMutex, u16>,
 }
 
-impl<const N: usize> PotentiometerManager<N> {
-    /// Creates a new `PotentiometerManager` with the specified calibration and timing.
+impl<const N: usize> PotentiometerReader<N> {
+    /// Creates a new `PotentiometerReader`.
     ///
     /// * `adc`: The initialized ADC peripheral.
     /// * `channel`: The specific ADC channel (GP26) connected to the dial wiper.
-    /// * `state`: The `VolumeState` to update with new readings.
     /// * `interval`: How often to sample the hardware.
-    /// * `bottom`: Clipping level for the low end (clamped to 0.0 below this).
-    /// * `top`: Clipping level for the high end (clamped to 1.0 above this).
-    /// * `hysteresis_band`: The hysteresis band in LSB.
-    /// * `on_change`: A signal used to notify other tasks when the value changes.
+    /// * `hysteresis_band`: The hysteresis band in raw LSB.
+    /// * `raw_signal`: The signal to notify with new stable raw values.
     fn new(
         adc: Adc<'static, Async>,
         channel: Channel<'static>,
-        state: &'static VolumeState,
         interval: Duration,
-        bottom: f32,
-        top: f32,
         hysteresis_band: u16,
-        on_change: &'static Signal<CriticalSectionRawMutex, ()>,
+        raw_signal: &'static Signal<CriticalSectionRawMutex, u16>,
     ) -> Self {
         Self {
             adc,
             channel,
-            state,
             interval,
-            bottom,
-            top,
             buffer: [0; N],
             index: 0,
             count: 0,
             hysteresis_band,
             last_stable_val: None,
-            on_change,
+            raw_signal,
         }
     }
 
-    /// Continuously polls the ADC and updates the shared volume state.
-    ///
-    /// This loop converts the raw 12-bit ADC range into a normalized 0.0..1.0 range,
-    /// applying a median filter and hysteresis to ensure smooth updates.
+    /// Continuously polls the ADC and publishes stable raw values.
     async fn run(mut self) {
         let mut ticker = Ticker::every(self.interval);
         loop {
@@ -199,36 +183,112 @@ impl<const N: usize> PotentiometerManager<N> {
                 sort_buf[..self.count].sort_unstable();
                 let median_val = sort_buf[self.count / 2];
 
-                let mut changed = false;
-                let stable_val = if let Some(last) = self.last_stable_val {
+                let changed = if let Some(last) = self.last_stable_val {
                     if (median_val as i32 - last as i32).abs() > self.hysteresis_band as i32 {
                         self.last_stable_val = Some(median_val);
-                        changed = true;
-                        median_val
+                        true
                     } else {
-                        last
+                        false
                     }
                 } else {
                     self.last_stable_val = Some(median_val);
-                    changed = true;
-                    median_val
-                };
-
-                let val = stable_val as f32 / 4095.0;
-                let normalized = if val <= self.bottom {
-                    0.0
-                } else if val >= self.top {
-                    1.0
-                } else {
-                    (val - self.bottom) / (self.top - self.bottom)
+                    true
                 };
 
                 if changed {
-                    self.state.set(normalized);
-                    self.on_change.signal(());
+                    self.raw_signal.signal(self.last_stable_val.unwrap());
                 }
             }
             ticker.next().await;
+        }
+    }
+}
+
+/// `PotentiometerConverter` handles the translation from raw ADC values to
+/// normalized volume levels based on dynamic calibration parameters.
+struct PotentiometerConverter {
+    /// Bottom clipping level (raw counts).
+    bottom: AtomicU32,
+    /// Top clipping level (raw counts).
+    top: AtomicU32,
+}
+
+impl PotentiometerConverter {
+    /// Creates a new converter with the specified raw range.
+    const fn new(bottom: u16, top: u16) -> Self {
+        Self {
+            bottom: AtomicU32::new(bottom as u32),
+            top: AtomicU32::new(top as u32),
+        }
+    }
+
+    /// Updates the calibration range at runtime.
+    fn set_range(&self, bottom: u16, top: u16) {
+        self.bottom.store(bottom as u32, Ordering::Relaxed);
+        self.top.store(top as u32, Ordering::Relaxed);
+    }
+
+    /// Translates a raw ADC reading into a normalized 0.0..1.0 float.
+    fn convert(&self, raw: u16) -> f32 {
+        let bottom = self.bottom.load(Ordering::Relaxed) as u16;
+        let top = self.top.load(Ordering::Relaxed) as u16;
+
+        if raw <= bottom {
+            0.0
+        } else if raw >= top {
+            1.0
+        } else {
+            (raw - bottom) as f32 / (top - bottom) as f32
+        }
+    }
+}
+
+/// `PotentiometerManager` orchestrates the data flow for the potentiometer.
+///
+/// It listens for raw ADC events from the `PotentiometerReader`, transforms them
+/// using the `PotentiometerConverter`, and publishes the final normalized
+/// volume to the shared `VolumeState`. It also reacts to range changes to
+/// ensure the volume is always consistent with the current calibration.
+struct PotentiometerManager {
+    converter: &'static PotentiometerConverter,
+    state: &'static VolumeState,
+    raw_signal: &'static Signal<CriticalSectionRawMutex, u16>,
+    range_signal: &'static Signal<CriticalSectionRawMutex, ()>,
+    on_change: &'static Signal<CriticalSectionRawMutex, ()>,
+}
+
+impl PotentiometerManager {
+    /// Creates a new manager.
+    fn new(
+        converter: &'static PotentiometerConverter,
+        state: &'static VolumeState,
+        raw_signal: &'static Signal<CriticalSectionRawMutex, u16>,
+        range_signal: &'static Signal<CriticalSectionRawMutex, ()>,
+        on_change: &'static Signal<CriticalSectionRawMutex, ()>,
+    ) -> Self {
+        Self {
+            converter,
+            state,
+            raw_signal,
+            range_signal,
+            on_change,
+        }
+    }
+
+    /// Main loop that waits for raw updates or range changes and processes them.
+    async fn run(self) {
+        let mut last_raw = 0u16;
+        loop {
+            match embassy_futures::select::select(self.raw_signal.wait(), self.range_signal.wait()).await {
+                embassy_futures::select::Either::First(raw_val) => {
+                    last_raw = raw_val;
+                }
+                embassy_futures::select::Either::Second(_) => {}
+            }
+
+            let normalized = self.converter.convert(last_raw);
+            self.state.set(normalized);
+            self.on_change.signal(());
         }
     }
 }
@@ -260,7 +320,13 @@ impl Reporter {
 
 /// Embassy task wrapper for the Potentiometer polling loop.
 #[embassy_executor::task]
-async fn potentiometer_task(manager: PotentiometerManager<15>) {
+async fn potentiometer_reader_task(reader: PotentiometerReader<15>) {
+    reader.run().await;
+}
+
+/// Embassy task wrapper for the Potentiometer manager.
+#[embassy_executor::task]
+async fn potentiometer_manager_task(manager: PotentiometerManager) {
     manager.run().await;
 }
 
@@ -275,14 +341,19 @@ async fn reporter_task(reporter: Reporter) {
 /// It handles device enumeration and manages the serial port (CDC-ACM) communication
 /// by running the `run_serial` loop when a host connection is active.
 #[embassy_executor::task]
-async fn usb_task(builder: Builder<'static, Driver<'static, USB>>, mut class: CdcAcmClass<'static, Driver<'static, USB>>) {
+async fn usb_task(
+    builder: Builder<'static, Driver<'static, USB>>,
+    mut class: CdcAcmClass<'static, Driver<'static, USB>>,
+    converter: &'static PotentiometerConverter,
+    range_signal: &'static Signal<CriticalSectionRawMutex, ()>,
+) {
     let mut usb = builder.build();
     let usb_fut = usb.run();
 
     let echo_fut = async {
         loop {
             class.wait_connection().await;
-            let _ = run_serial(&mut class).await;
+            let _ = run_serial(&mut class, converter, range_signal).await;
         }
     };
 
@@ -292,9 +363,13 @@ async fn usb_task(builder: Builder<'static, Driver<'static, USB>>, mut class: Cd
 /// `run_serial` implements the actual bi-directional JSON communication protocol over USB.
 ///
 /// It performs two main roles:
-/// 1. Processes incoming packets from the host (e.g., Pings).
+/// 1. Processes incoming packets from the host (e.g., Pings, Calibration updates).
 /// 2. Drains the `OUTGOING_CHANNEL` and sends JSON messages to the host (e.g., Volume updates, Logs).
-async fn run_serial(class: &mut CdcAcmClass<'static, Driver<'static, USB>>) -> Result<(), EndpointError> {
+async fn run_serial(
+    class: &mut CdcAcmClass<'static, Driver<'static, USB>>,
+    converter: &'static PotentiometerConverter,
+    range_signal: &'static Signal<CriticalSectionRawMutex, ()>,
+) -> Result<(), EndpointError> {
     let mut buf = [0u8; 256];
     loop {
         let read_fut = class.read_packet(&mut buf);
@@ -314,6 +389,11 @@ async fn run_serial(class: &mut CdcAcmClass<'static, Driver<'static, USB>>) -> R
                             let _ = core::fmt::write(&mut resp, format_args!("Tek'ma'te Bra'tac"));
                             let _ = OUTGOING_CHANNEL.try_send(OutgoingMessage::Handshake { message: resp });
                         }
+                    }
+                    Ok((IncomingMessage::UpdateCalibration { bottom, top }, _)) => {
+                        converter.set_range(bottom, top);
+                        range_signal.signal(());
+                        log::info!("Calibration updated: {} - {}", bottom, top);
                     }
                     _ => {}
                 }
@@ -366,12 +446,26 @@ async fn main(spawner: Spawner) {
 
     let class = CdcAcmClass::new(&mut builder, STATE.init(State::new()), 64);
 
-    spawner.spawn(usb_task(builder, class).unwrap());
-
     // Volume state is allocated in a StaticCell to provide a 'static reference that can
     // be shared safely between multiple tasks.
     static VOLUME_STATE: StaticCell<VolumeState> = StaticCell::new();
     let volume = VOLUME_STATE.init(VolumeState::new());
+
+    // Create signals for inter-task communication.
+    static POT_RAW_SIGNAL: StaticCell<Signal<CriticalSectionRawMutex, u16>> = StaticCell::new();
+    let raw_signal = POT_RAW_SIGNAL.init(Signal::new());
+
+    static POT_RANGE_SIGNAL: StaticCell<Signal<CriticalSectionRawMutex, ()>> = StaticCell::new();
+    let range_signal = POT_RANGE_SIGNAL.init(Signal::new());
+
+    static POT_CHANGE_SIGNAL: StaticCell<Signal<CriticalSectionRawMutex, ()>> = StaticCell::new();
+    let on_change = POT_CHANGE_SIGNAL.init(Signal::new());
+
+    // Initialize the converter with default calibration (raw ADC counts).
+    static CONVERTER: StaticCell<PotentiometerConverter> = StaticCell::new();
+    let converter = CONVERTER.init(PotentiometerConverter::new(82, 4013));
+
+    spawner.spawn(usb_task(builder, class, converter, range_signal).unwrap());
 
     // Initialize status LED: Always on to indicate device power.
     let mut led = Output::new(p.PIN_25, Level::High);
@@ -381,25 +475,26 @@ async fn main(spawner: Spawner) {
     let adc = Adc::new(p.ADC, Irqs, AdcConfig::default());
     let channel = Channel::new_pin(p.PIN_26, embassy_rp::gpio::Pull::None);
 
-    // Create a signal to notify the reporter when the potentiometer value changes.
-    static POT_CHANGE_SIGNAL: StaticCell<Signal<CriticalSectionRawMutex, ()>> = StaticCell::new();
-    let on_change = POT_CHANGE_SIGNAL.init(Signal::new());
-
     // Dependency Injection: Component assembly.
-    let pot_manager = PotentiometerManager::<15>::new(
+    let pot_reader = PotentiometerReader::<15>::new(
         adc,
         channel,
-        volume,
         Duration::from_millis(2),
-        0.02,
-        0.98,
         21,
+        raw_signal,
+    );
+    let pot_manager = PotentiometerManager::new(
+        converter,
+        volume,
+        raw_signal,
+        range_signal,
         on_change,
     );
     let reporter = Reporter::new(volume, on_change);
 
     // Final hand-off to the async executor.
-    spawner.spawn(potentiometer_task(pot_manager).unwrap());
+    spawner.spawn(potentiometer_reader_task(pot_reader).unwrap());
+    spawner.spawn(potentiometer_manager_task(pot_manager).unwrap());
     spawner.spawn(reporter_task(reporter).unwrap());
 
     log::info!("DHD Firmware Initialized");

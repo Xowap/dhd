@@ -30,3 +30,22 @@ The device connects to the host computer via the micro-USB or USB-C port (depend
 1. Power to the board and potentiometer.
 2. Bi-directional JSON communication for volume updates and logs.
 3. Firmware flashing (via `picotool` or BOOTSEL mode).
+
+## Motor Driver (DRV8833)
+
+The motor driver controls the motorized potentiometer to provide physical feedback and remote adjustments.
+
+| DRV8833 Pin | Connects To | Purpose |
+| :--- | :--- | :--- |
+| **VM** (or VCC/Motor) | **Pico Pin 40 (VBUS)** | Feeds raw 5V from USB to the motor. |
+| **GND** | **Pico Pin 38 (GND)** | Completes the power circuit. |
+| **IN1** | **GP14 (Pin 19)** | Motor logic (Forward). |
+| **IN2** | **GP15 (Pin 20)** | Motor logic (Backward). |
+| **OUT1** | Fader Motor Pin A | Power out to the physical motor. |
+| **OUT2** | Fader Motor Pin B | Power out to the physical motor. |
+| **EEP** (or SLP/STBY)* | **3.3V OUT (Pin 36)** | If your board has this pin, it must be connected to 3.3V to "wake up" the chip. |
+
+### Notes:
+- **VM** is connected to **VBUS** (5V) rather than 3.3V to provide sufficient torque for the motor.
+- **GP14** and **GP15** are used as PWM outputs to control motor speed and direction.
+- Ensure common ground between the Pico and the motor driver.
