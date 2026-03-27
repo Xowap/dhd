@@ -62,4 +62,7 @@ pub enum IncomingMessage {
         /// Top clipping level (raw counts).
         top: u16,
     },
+    /// Triggers the device's auto-calibration routine.
+    #[serde(rename = "start_calibration")]
+    StartCalibration,
 }
