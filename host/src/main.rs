@@ -14,8 +14,9 @@ use common::{IncomingMessage, OutgoingMessage};
 use futures::{SinkExt, StreamExt};
 use libpulse_binding as pulse;
 use pulse::context::{Context, State};
+use pulse::context::subscribe::Facility;
 use pulse::mainloop::threaded::Mainloop;
-use pulse::volume::Volume;
+use pulse::volume::{Volume, ChannelVolumes};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::interval;
@@ -27,6 +28,13 @@ const VID: u16 = 0x2e8a;
 /// Raspberry Pi Pico CDC-ACM Product ID.
 const PID: u16 = 0x000a;
 
+#[derive(Default)]
+struct PulseCache {
+    sink_index: Option<u32>,
+    num_channels: u8,
+    needs_refresh: bool,
+}
+
 /// PulseAudio controller for system volume adjustment.
 /// 
 /// Uses a threaded mainloop to handle PulseAudio events and callbacks
@@ -34,6 +42,7 @@ const PID: u16 = 0x000a;
 struct PulseController {
     mainloop: Mainloop,
     context: Context,
+    cache: Arc<Mutex<PulseCache>>,
 }
 
 // PulseController is safe to share across threads because we use the
@@ -69,7 +78,36 @@ impl PulseController {
             }
         }
 
-        Ok(Self { mainloop, context })
+        let cache = Arc::new(Mutex::new(PulseCache {
+            needs_refresh: true,
+            ..Default::default()
+        }));
+        let cache_clone = Arc::clone(&cache);
+
+        mainloop.lock();
+        context.set_subscribe_callback(Some(Box::new(move |facility, _op, _index| {
+            if let Some(Facility::Server) = facility {
+                if let Ok(mut c) = cache_clone.lock() {
+                    if !c.needs_refresh {
+                        let now = Local::now().format("%H:%M:%S%.3f").to_string().dimmed();
+                        println!("{} [{}] Default sink change detected", now, "PULSE".magenta().bold());
+                        c.needs_refresh = true;
+                    }
+                }
+            }
+        })));
+
+        context.subscribe(
+            pulse::context::subscribe::InterestMaskSet::SERVER,
+            |_| {}
+        );
+        mainloop.unlock();
+
+        Ok(Self { 
+            mainloop, 
+            context,
+            cache,
+        })
     }
 
     fn set_volume(&mut self, value: f32) {
@@ -78,23 +116,56 @@ impl PulseController {
         
         self.mainloop.lock();
         
-        let ctx_ptr = &mut self.context as *mut Context;
+        let (index, n_channels, needs_refresh) = {
+            let c = self.cache.lock().unwrap();
+            (c.sink_index, c.num_channels, c.needs_refresh)
+        };
         
-        self.context.introspect().get_sink_info_by_name("@DEFAULT_SINK@", move |res| {
-            if let pulse::callbacks::ListResult::Item(info) = res {
-                let mut new_volume = info.volume;
-                for v in new_volume.get_mut() {
-                    *v = vol;
-                }
-                unsafe {
-                    (*ctx_ptr).introspect().set_sink_volume_by_index(
-                        info.index,
-                        &new_volume,
-                        None,
+        if needs_refresh || index.is_none() {
+            let ctx_ptr = &mut self.context as *mut Context;
+            let cache_ptr = Arc::clone(&self.cache);
+            
+            self.context.introspect().get_sink_info_by_name("@DEFAULT_SINK@", move |res| {
+                if let pulse::callbacks::ListResult::Item(info) = res {
+                    let now = Local::now().format("%H:%M:%S%.3f").to_string().dimmed();
+                    let name = info.name.as_deref().unwrap_or("unknown");
+                    let desc = info.description.as_deref().unwrap_or("no description");
+                    println!(
+                        "{} [{}] Default sink: {} ({})",
+                        now,
+                        "PULSE".magenta().bold(),
+                        name.cyan(),
+                        desc.italic().dimmed()
                     );
+                    
+                    if let Ok(mut c) = cache_ptr.lock() {
+                        c.sink_index = Some(info.index);
+                        c.num_channels = info.volume.get().len() as u8;
+                        c.needs_refresh = false;
+                    }
+
+                    let mut new_volume = info.volume;
+                    for v in new_volume.get_mut() {
+                        *v = vol;
+                    }
+                    unsafe {
+                        (*ctx_ptr).introspect().set_sink_volume_by_index(
+                            info.index,
+                            &new_volume,
+                            None,
+                        );
+                    }
                 }
-            }
-        });
+            });
+        } else {
+            let mut cv = ChannelVolumes::default();
+            cv.set(n_channels, vol);
+            self.context.introspect().set_sink_volume_by_index(
+                index.unwrap(),
+                &cv,
+                None,
+            );
+        }
         
         self.mainloop.unlock();
     }
