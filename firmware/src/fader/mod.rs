@@ -9,6 +9,10 @@ pub mod reader;
 
 /// State and signals related to the physical fader hardware.
 pub struct FaderState {
+    /// Scaling factor for speed, which mostly serves to orient the speed
+    /// control in a way that makes sense with the potentiometer's axis
+    pub speed_scale: f32,
+    
     pub last_raw_adc: AtomicU32,
     pub volume_ppm: AtomicU32,
     pub bottom: AtomicU32,
@@ -27,6 +31,7 @@ pub struct FaderState {
 impl FaderState {
     pub const fn new() -> Self {
         Self {
+            speed_scale: 1.0,
             last_raw_adc: AtomicU32::new(0),
             volume_ppm: AtomicU32::new(0),
             bottom: AtomicU32::new(82),

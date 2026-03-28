@@ -100,6 +100,7 @@ fn handle_incoming_packet(
             let mut res = heapless::String::<32>::new();
             let _ = core::fmt::write(&mut res, format_args!("Tek'ma'te Bra'tac"));
             let _ = comms.chan_outgoing.try_send(OutgoingMessage::Handshake { message: res });
+            system.sig_handshake_done.signal(());
         }
         Ok((IncomingMessage::StartCalibration, _)) => {
             system.sig_start_calib.signal(());

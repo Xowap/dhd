@@ -8,6 +8,7 @@
 mod fader;
 mod comms;
 mod system;
+pub mod utils;
 
 use embassy_executor::Spawner;
 use embassy_rp::adc::{Adc, Config as AdcConfig, Channel};
@@ -17,7 +18,7 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::peripherals::USB;
 use embassy_rp::usb::InterruptHandler as UsbInterruptHandler;
 use embassy_rp::adc::InterruptHandler as AdcInterruptHandler;
-use embassy_time::{Instant, Timer};
+use embassy_time::Instant;
 use embassy_usb::Builder;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcState};
 use embassy_usb::Config as UsbConfig;
@@ -95,7 +96,7 @@ async fn main(spawner: Spawner) {
     loop {
         match SYSTEM.get_mode() {
             SystemMode::Init => {
-                Timer::after_millis(500).await;
+                SYSTEM.sig_handshake_done.wait().await;
                 while COMMS.chan_outgoing.try_receive().is_ok() {}
                 SYSTEM.set_mode(SystemMode::Calibration);
             }
