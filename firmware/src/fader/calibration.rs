@@ -35,6 +35,9 @@ impl CalibrationService {
         log::info!("Boundaries: {} - {}", boundaries.min, boundaries.max);
         log::info!("Speed Scale: {}", boundaries.speed_scale);
 
+        let lowest_speed = self.find_lowest_speed().await;
+        log::info!("Lowest speed: {}", lowest_speed);
+
         log::info!("Calibration complete.");
     }
 
@@ -57,6 +60,28 @@ impl CalibrationService {
             max: a,
             min: b,
             speed_scale: s,
+        }
+    }
+
+    /// The motor doesn't move beyond a given speed. Here we look for the
+    /// lowest speed that manages to move the knob. We do this using a
+    /// bisection algorithm, testing different values and seeing at which point
+    /// it stops moving, with a precision of 0.01 (on the scale from 0 to 1).
+    async fn find_lowest_speed(&mut self) -> f32 {
+        let mut left = 0.0;
+        let mut right = 1.0;
+
+        loop {
+            let mid = (left + right) / 2.0;
+            if self.fader.moves_at_speed(mid).await {
+                right = mid;
+            } else {
+                left = mid;
+            }
+
+            if right - left < 0.01 {
+                return left;
+            }
         }
     }
 }

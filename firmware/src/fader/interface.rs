@@ -111,4 +111,26 @@ impl FaderInterface {
 
         return positions[(positions.len() - 1) / 2];
     }
+
+    /// First rams the knob into one end at 0.5 speed (which we consider safe)
+    /// and then we move it in the other direction for a few samples. If the
+    /// samples don't seem to be trending, we consider that the knob is stuck
+    /// and thus that this speed is not a "moving" speed (when it's too low).
+    pub async fn moves_at_speed(&mut self, speed: f32) -> bool {
+        self.drive_until_stall(speed.signum() * -0.5).await;
+        let mut speed_controller = self.get_speed_controller();
+        let mut samples = [0u16; 20];
+
+        speed_controller.set_raw_speed(speed);
+
+        for i in 0..samples.len() {
+            speed_controller.fader.state.sig_raw_changed.wait().await;
+            samples[i] = speed_controller.fader.get_raw_pos();
+        }
+
+        match circular_linear_regression(&samples, samples.len()) {
+            Some((slope, _)) => slope.abs() > 1.0,
+            None => false,
+        }
+    }
 }
