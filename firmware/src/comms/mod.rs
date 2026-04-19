@@ -2,8 +2,8 @@ use common::OutgoingMessage;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel as MsgChannel;
 
-pub mod usb;
 pub mod reporter;
+pub mod usb;
 
 pub struct CommsBus {
     pub chan_outgoing: MsgChannel<CriticalSectionRawMutex, OutgoingMessage, 256>,

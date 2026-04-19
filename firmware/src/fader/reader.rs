@@ -1,14 +1,14 @@
+use crate::fader::FaderState;
+use core::sync::atomic::Ordering;
 use embassy_rp::adc::{Adc, Async, Channel};
 use embassy_time::{Duration, Ticker};
-use core::sync::atomic::Ordering;
-use crate::fader::FaderState;
 
 #[embassy_executor::task]
 pub async fn reader_task(
-    mut adc: Adc<'static, Async>, 
-    mut ch: Channel<'static>, 
+    mut adc: Adc<'static, Async>,
+    mut ch: Channel<'static>,
     state: &'static FaderState,
-    hysteresis: u16
+    hysteresis: u16,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(2));
     let mut filter = MedianFilter::<15>::new();
@@ -59,7 +59,9 @@ impl<const N: usize> MedianFilter<N> {
     fn push(&mut self, val: u16) -> Option<u16> {
         self.buffer[self.index % N] = val;
         self.index += 1;
-        if self.count < N { self.count += 1; }
+        if self.count < N {
+            self.count += 1;
+        }
 
         if self.count == N {
             let mut sort_buf = self.buffer;

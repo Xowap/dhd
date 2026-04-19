@@ -13,10 +13,10 @@ use colored::*;
 use common::{IncomingMessage, OutgoingMessage};
 use futures::{SinkExt, StreamExt};
 use libpulse_binding as pulse;
-use pulse::context::{Context, State};
 use pulse::context::subscribe::Facility;
+use pulse::context::{Context, State};
 use pulse::mainloop::threaded::Mainloop;
-use pulse::volume::{Volume, ChannelVolumes};
+use pulse::volume::{ChannelVolumes, Volume};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::interval;
@@ -44,7 +44,7 @@ struct PulseCache {
 }
 
 /// PulseAudio controller for system volume adjustment.
-/// 
+///
 /// Uses a threaded mainloop to handle PulseAudio events and callbacks
 /// asynchronously from the main Tokio loop.
 struct PulseController {
@@ -68,14 +68,17 @@ impl PulseController {
     fn new() -> Result<(Self, mpsc::UnboundedReceiver<PulseEvent>)> {
         let mut mainloop = Mainloop::new()
             .ok_or_else(|| anyhow::anyhow!("Failed to create PulseAudio mainloop"))?;
-        
+
         let mut context = Context::new(&mainloop, "DHD Host")
             .ok_or_else(|| anyhow::anyhow!("Failed to create PulseAudio context"))?;
 
-        context.connect(None, pulse::context::FlagSet::NOFLAGS, None)
+        context
+            .connect(None, pulse::context::FlagSet::NOFLAGS, None)
             .map_err(|e| anyhow::anyhow!("Failed to connect PulseAudio context: {:?}", e))?;
 
-        mainloop.start().map_err(|e| anyhow::anyhow!("Failed to start PulseAudio mainloop: {:?}", e))?;
+        mainloop
+            .start()
+            .map_err(|e| anyhow::anyhow!("Failed to start PulseAudio mainloop: {:?}", e))?;
 
         // Wait for context to be ready
         loop {
@@ -105,31 +108,51 @@ impl PulseController {
         })));
 
         context.subscribe(
-            pulse::context::subscribe::InterestMaskSet::SERVER | pulse::context::subscribe::InterestMaskSet::SINK,
-            |_| {}
+            pulse::context::subscribe::InterestMaskSet::SERVER
+                | pulse::context::subscribe::InterestMaskSet::SINK,
+            |_| {},
         );
 
         let cache_initial = Arc::clone(&cache);
-        context.introspect().get_sink_info_by_name("@DEFAULT_SINK@", move |res| {
-            if let pulse::callbacks::ListResult::Item(info) = res {
-                Self::update_cache_and_log(&cache_initial, info, "Default sink");
-            }
-        });
+        context
+            .introspect()
+            .get_sink_info_by_name("@DEFAULT_SINK@", move |res| {
+                if let pulse::callbacks::ListResult::Item(info) = res {
+                    Self::update_cache_and_log(&cache_initial, info, "Default sink");
+                }
+            });
 
         mainloop.unlock();
 
-        Ok((Self { mainloop, context, cache }, rx))
+        Ok((
+            Self {
+                mainloop,
+                context,
+                cache,
+            },
+            rx,
+        ))
     }
 
-    fn update_cache_and_log(cache: &Arc<Mutex<PulseCache>>, info: &pulse::context::introspect::SinkInfo, label: &str) {
+    fn update_cache_and_log(
+        cache: &Arc<Mutex<PulseCache>>,
+        info: &pulse::context::introspect::SinkInfo,
+        label: &str,
+    ) {
         let name = info.name.as_deref().unwrap_or("unknown");
         let desc = info.description.as_deref().unwrap_or("no description");
         let current_vol = info.volume.avg().0 as f32 / Volume::NORMAL.0 as f32;
-        
+
         log(
             "PULSE",
             "PULSE".magenta(),
-            format!("{}: {} ({}) [vol: {:.3}]", label, name.cyan(), desc.italic().dimmed(), current_vol)
+            format!(
+                "{}: {} ({}) [vol: {:.3}]",
+                label,
+                name.cyan(),
+                desc.italic().dimmed(),
+                current_vol
+            ),
         );
 
         if let Ok(mut c) = cache.lock() {
@@ -144,11 +167,13 @@ impl PulseController {
         match event {
             PulseEvent::ServerChange => {
                 let cache_inner = Arc::clone(&self.cache);
-                self.context.introspect().get_sink_info_by_name("@DEFAULT_SINK@", move |res| {
-                    if let pulse::callbacks::ListResult::Item(info) = res {
-                        Self::update_cache_and_log(&cache_inner, info, "Default sink changed");
-                    }
-                });
+                self.context
+                    .introspect()
+                    .get_sink_info_by_name("@DEFAULT_SINK@", move |res| {
+                        if let pulse::callbacks::ListResult::Item(info) = res {
+                            Self::update_cache_and_log(&cache_inner, info, "Default sink changed");
+                        }
+                    });
             }
             PulseEvent::SinkChange(index) => {
                 let (target_index, last_vol) = {
@@ -158,19 +183,26 @@ impl PulseController {
 
                 if Some(index) == target_index {
                     let cache_inner = Arc::clone(&self.cache);
-                    self.context.introspect().get_sink_info_by_index(index, move |res| {
-                        if let pulse::callbacks::ListResult::Item(info) = res {
-                            if info.volume != last_vol {
-                                if let Ok(mut c) = cache_inner.lock() {
-                                    if info.volume != c.last_volume {
-                                        let avg_vol = info.volume.avg().0 as f32 / Volume::NORMAL.0 as f32;
-                                        c.last_volume = info.volume;
-                                        log("PULSE", "PULSE".green(), format!("External volume change: {:.3}", avg_vol));
+                    self.context
+                        .introspect()
+                        .get_sink_info_by_index(index, move |res| {
+                            if let pulse::callbacks::ListResult::Item(info) = res {
+                                if info.volume != last_vol {
+                                    if let Ok(mut c) = cache_inner.lock() {
+                                        if info.volume != c.last_volume {
+                                            let avg_vol = info.volume.avg().0 as f32
+                                                / Volume::NORMAL.0 as f32;
+                                            c.last_volume = info.volume;
+                                            log(
+                                                "PULSE",
+                                                "PULSE".green(),
+                                                format!("External volume change: {:.3}", avg_vol),
+                                            );
+                                        }
                                     }
                                 }
                             }
-                        }
-                    });
+                        });
                 }
             }
         }
@@ -179,29 +211,27 @@ impl PulseController {
 
     fn set_volume(&mut self, value: f32) {
         let vol = Volume((Volume::NORMAL.0 as f32 * value) as u32);
-        
+
         self.mainloop.lock();
-        
+
         let (index, n_channels) = {
             let c = self.cache.lock().unwrap();
             (c.sink_index, c.num_channels)
         };
-        
+
         if let Some(idx) = index {
             let mut cv = ChannelVolumes::default();
             cv.set(n_channels, vol);
-            
+
             if let Ok(mut c) = self.cache.lock() {
                 c.last_volume = cv;
             }
 
-            self.context.introspect().set_sink_volume_by_index(
-                idx,
-                &cv,
-                None,
-            );
+            self.context
+                .introspect()
+                .set_sink_volume_by_index(idx, &cv, None);
         }
-        
+
         self.mainloop.unlock();
     }
 }
@@ -362,10 +392,7 @@ async fn run_host(
 }
 
 /// Dispatches an incoming `OutgoingMessage` to the appropriate display logic.
-fn handle_message(
-    msg: OutgoingMessage,
-    pulse: Option<&Arc<Mutex<PulseController>>>,
-) {
+fn handle_message(msg: OutgoingMessage, pulse: Option<&Arc<Mutex<PulseController>>>) {
     match msg {
         OutgoingMessage::Volume { value } => {
             let bar_len = (value * 20.0).clamp(0.0, 20.0) as usize;
@@ -390,7 +417,11 @@ fn handle_message(
         }
         OutgoingMessage::Pong { .. } => {}
         OutgoingMessage::Handshake { message } => {
-            log("HEALTH", "HEALTH".yellow(), format!("Unexpected handshake response: {}", message));
+            log(
+                "HEALTH",
+                "HEALTH".yellow(),
+                format!("Unexpected handshake response: {}", message),
+            );
         }
     }
 }

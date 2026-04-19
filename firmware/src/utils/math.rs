@@ -2,7 +2,9 @@
 /// trend in the dataset. Useful for calibration.
 pub fn circular_linear_regression(data: &[u16], head: usize) -> Option<(f64, f64)> {
     let n = data.len() as f64;
-    if n < 2.0 { return None; }
+    if n < 2.0 {
+        return None;
+    }
 
     let mut sum_x = 0.0;
     let mut sum_y = 0.0;
@@ -25,7 +27,9 @@ pub fn circular_linear_regression(data: &[u16], head: usize) -> Option<(f64, f64
     }
 
     let denominator = n * sum_xx - sum_x * sum_x;
-    if denominator == 0.0 { return None; }
+    if denominator == 0.0 {
+        return None;
+    }
 
     let m = (n * sum_xy - sum_x * sum_y) / denominator;
     let b = (sum_y - m * sum_x) / n;

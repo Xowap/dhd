@@ -10,6 +10,7 @@ pub enum SystemMode {
     Init = 0,
     Calibration = 1,
     Standby = 2,
+    Failsafe = 3,
 }
 
 /// State and signals for device-level coordination.
@@ -38,6 +39,7 @@ impl SystemState {
         match self.mode.load(Ordering::Relaxed) {
             1 => SystemMode::Calibration,
             2 => SystemMode::Standby,
+            3 => SystemMode::Failsafe,
             _ => SystemMode::Init,
         }
     }

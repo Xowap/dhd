@@ -1,44 +1,91 @@
-use embassy_time::Instant;
-use crate::fader::{FaderState, interface::FaderInterface};
-use crate::comms::CommsBus;
+use crate::fader::interface::FaderInterface;
 
 pub struct CalibrationService {
     fader: FaderInterface,
-    fader_state: &'static FaderState,
-    comms: &'static CommsBus,
-    samples_buf: &'static mut [(Instant, u16)],
-    hysteresis: u16,
 }
 
 /// Outcome of the boundaries calibration
+#[derive(Clone, Copy, Debug)]
 pub struct Boundaries {
+    /// Minimum value that you will read on the potentiometer
     pub min: u16,
+
+    /// Maximum value that you will read on the potentiometer
     pub max: u16,
+
+    /// Can be either 1 or -1, which tells you in which direction the knob
+    /// moves based on the speed you send. This is because knowing which wire
+    /// from the motor is which is a fucking pain in the ass so I much prefer
+    /// to have this figured at runtime than to re-solder the damn fucking
+    /// thing. If positive, positive speed increases the value. If negative,
+    /// negative speed increases the value.
     pub speed_scale: f32,
 }
 
+impl Boundaries {
+    /// Transforms the raw ADC value into a 0.0-1.0 value, clipped according to
+    /// the boundaries.
+    pub fn interpolate(&self, val: u16) -> f32 {
+        if self.max <= self.min {
+            return 0.0;
+        }
+
+        let val = val.clamp(self.min, self.max);
+        let range = (self.max - self.min) as f32;
+
+        (val - self.min) as f32 / range
+    }
+}
+
+/// Outcome of the calibration process
+#[derive(Clone, Copy, Debug)]
+pub struct CalibrationResult {
+    /// This way we know what are the min/max values to use on the
+    /// potentiometer (to convert from the 0-100% scale to the physical scale
+    /// and vice-versa).
+    pub boundaries: Boundaries,
+
+    /// Lowest speed at which the knob will move (below this, the power given
+    /// to the motor will not be enough).
+    pub lowest_speed: f32,
+}
+
+impl CalibrationResult {
+    pub fn new() -> Self {
+        Self {
+            boundaries: Boundaries {
+                min: 0,
+                max: 0,
+                speed_scale: 0.0,
+            },
+            lowest_speed: 0.0,
+        }
+    }
+}
+
 impl CalibrationService {
-    pub fn new(
-        fader: FaderInterface, 
-        fader_state: &'static FaderState, 
-        comms: &'static CommsBus,
-        samples: &'static mut [(Instant, u16)], 
-        hysteresis: u16
-    ) -> Self {
-        Self { fader, fader_state, comms, samples_buf: samples, hysteresis }
+    pub fn new(fader: FaderInterface) -> Self {
+        Self { fader }
     }
 
-    pub async fn run_calibration(&mut self) {
+    /// Runs the calibration process, which gives the rest of the program a
+    /// clear knowledge of the system's physical parameters
+    pub async fn run_calibration(&mut self) -> Option<CalibrationResult> {
+        let mut out = CalibrationResult::new();
         log::info!("Calibration starting...");
 
-        let boundaries = self.find_boundaries(0.5).await;
-        log::info!("Boundaries: {} - {}", boundaries.min, boundaries.max);
-        log::info!("Speed Scale: {}", boundaries.speed_scale);
+        out.boundaries = self.find_boundaries(0.5).await;
+        log::info!(
+            "Boundaries: {} - {}",
+            out.boundaries.min,
+            out.boundaries.max
+        );
+        log::info!("Speed Scale: {}", out.boundaries.speed_scale);
 
-        let lowest_speed = self.find_lowest_speed().await;
-        log::info!("Lowest speed: {}", lowest_speed);
+        out.lowest_speed = self.find_lowest_speed().await;
+        log::info!("Lowest speed: {}", out.lowest_speed);
 
-        log::info!("Calibration complete.");
+        Some(out)
     }
 
     /// Explores the boundaries of the potentiometer

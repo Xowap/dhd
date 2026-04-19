@@ -1,7 +1,7 @@
+use super::FaderState;
+use crate::utils::math::circular_linear_regression;
 use core::sync::atomic::Ordering;
 use embassy_rp::pwm::{Config as PwmConfig, Pwm};
-use crate::utils::math::circular_linear_regression;
-use super::FaderState;
 
 /// A handler to control the speed of the motorized fader.
 ///
@@ -41,7 +41,14 @@ impl<'a> SpeedController<'a> {
     }
 
     pub fn set_speed(&mut self, speed: f32) {
-        self.set_raw_speed(speed * self.fader.state.speed_scale);
+        let speed_scale = self
+            .fader
+            .state
+            .calibration
+            .try_lock()
+            .map(|cal| cal.boundaries.speed_scale)
+            .unwrap_or(1.0);
+        self.set_raw_speed(speed * speed_scale);
     }
 }
 

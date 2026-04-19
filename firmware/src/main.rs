@@ -5,29 +5,31 @@
 #![no_std]
 #![no_main]
 
-mod fader;
 mod comms;
+mod fader;
 mod system;
 pub mod utils;
 
 use embassy_executor::Spawner;
-use embassy_rp::adc::{Adc, Config as AdcConfig, Channel};
-use embassy_rp::pwm::{Config as PwmConfig, Pwm};
-use embassy_rp::usb::Driver;
+use embassy_rp::adc::InterruptHandler as AdcInterruptHandler;
+use embassy_rp::adc::{Adc, Channel, Config as AdcConfig};
 use embassy_rp::bind_interrupts;
 use embassy_rp::peripherals::USB;
+use embassy_rp::pwm::{Config as PwmConfig, Pwm};
+use embassy_rp::usb::Driver;
 use embassy_rp::usb::InterruptHandler as UsbInterruptHandler;
-use embassy_rp::adc::InterruptHandler as AdcInterruptHandler;
-use embassy_time::Instant;
 use embassy_usb::Builder;
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcState};
 use embassy_usb::Config as UsbConfig;
+use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcState};
+use panic_halt as _;
 use static_cell::StaticCell;
-use {panic_halt as _};
 
+use crate::comms::{BUS as COMMS, reporter::task as reporter_task, usb::task as usb_task};
+use crate::fader::{
+    STATE as FADER, calibration::CalibrationService, interface::FaderInterface,
+    reader::reader_task, service::FaderService,
+};
 use crate::system::{STATE as SYSTEM, SystemMode, logger::LOGGER};
-use crate::fader::{STATE as FADER, interface::FaderInterface, service::FaderService, calibration::CalibrationService, reader::reader_task};
-use crate::comms::{BUS as COMMS, usb::task as usb_task, reporter::task as reporter_task};
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => UsbInterruptHandler<USB>;
@@ -38,7 +40,9 @@ bind_interrupts!(struct Irqs {
 #[used]
 pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
     embassy_rp::binary_info::rp_program_name!(c"DHD - Dial Hifi Device"),
-    embassy_rp::binary_info::rp_program_description!(c"Physical media controller with haptic volume feedback"),
+    embassy_rp::binary_info::rp_program_description!(
+        c"Physical media controller with haptic volume feedback"
+    ),
     embassy_rp::binary_info::rp_cargo_version!(),
     embassy_rp::binary_info::rp_program_build_attribute!(),
 ];
@@ -65,7 +69,14 @@ async fn main(spawner: Spawner) {
     config.device_protocol = 0x01;
     config.composite_with_iads = true;
 
-    let mut builder = Builder::new(driver, config, CONFIG_DESC.init([0; 256]), BOS_DESC.init([0; 256]), &mut [], CTRL_BUF.init([0; 64]));
+    let mut builder = Builder::new(
+        driver,
+        config,
+        CONFIG_DESC.init([0; 256]),
+        BOS_DESC.init([0; 256]),
+        &mut [],
+        CTRL_BUF.init([0; 64]),
+    );
     let class = CdcAcmClass::new(&mut builder, STATE.init(CdcState::new()), 64);
 
     // Hardware setup
@@ -76,15 +87,8 @@ async fn main(spawner: Spawner) {
 
     // Domain infrastructure assembly
     let fader_hw = FaderInterface::new(pwm, &FADER);
-    
-    static CAL_BUF: StaticCell<[(Instant, u16); 300]> = StaticCell::new();
-    let mut cal_svc = CalibrationService::new(
-        fader_hw, 
-        &FADER,
-        &COMMS,
-        CAL_BUF.init([(Instant::now(), 0); 300]), 
-        21
-    );
+
+    let mut cal_svc = CalibrationService::new(fader_hw);
     let mut fader_svc = FaderService::new(&FADER);
 
     // Spawn Domain tasks
@@ -101,15 +105,25 @@ async fn main(spawner: Spawner) {
                 SYSTEM.set_mode(SystemMode::Calibration);
             }
             SystemMode::Calibration => {
-                cal_svc.run_calibration().await;
-                SYSTEM.set_mode(SystemMode::Standby);
+                if let Some(result) = cal_svc.run_calibration().await {
+                    *FADER.calibration.lock().await = result;
+                    log::info!("Calibration complete.");
+                    SYSTEM.set_mode(SystemMode::Standby);
+                } else {
+                    log::error!("Calibration failed.");
+                    SYSTEM.set_mode(SystemMode::Failsafe);
+                }
             }
             SystemMode::Standby => {
-                embassy_futures::select::select(
-                    fader_svc.run(), 
-                    SYSTEM.sig_start_calib.wait()
-                ).await;
+                embassy_futures::select::select(fader_svc.run(), SYSTEM.sig_start_calib.wait())
+                    .await;
                 SYSTEM.set_mode(SystemMode::Calibration);
+            }
+            SystemMode::Failsafe => {
+                log::warn!("Failsafe mode");
+                loop {
+                    embassy_futures::yield_now().await;
+                }
             }
         }
     }

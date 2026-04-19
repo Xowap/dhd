@@ -21,22 +21,26 @@ This project is organized as a Cargo workspace:
 ### 1. Build and Flash the Firmware
 
 You will need the `thumbv8m.main-none-eabihf` target installed:
+
 ```bash
 rustup target add thumbv8m.main-none-eabihf
 ```
 
 To build and flash the device (requires `picotool`):
+
 ```bash
 cd firmware
 cargo run --release
 ```
-*Note: The firmware automatically targets the RP2350 and handles linker configurations via its internal `build.rs`.*
+
+_Note: The firmware automatically targets the RP2350 and handles linker configurations via its internal `build.rs`._
 
 ### 2. Run the Host Tool
 
 The host tool runs on your Linux machine and automatically detects the DHD when it is plugged in.
 
 From the project root:
+
 ```bash
 cargo run -p dhd
 ```
