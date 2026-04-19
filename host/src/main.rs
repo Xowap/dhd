@@ -186,21 +186,18 @@ impl PulseController {
                     self.context
                         .introspect()
                         .get_sink_info_by_index(index, move |res| {
-                            if let pulse::callbacks::ListResult::Item(info) = res {
-                                if info.volume != last_vol {
-                                    if let Ok(mut c) = cache_inner.lock() {
-                                        if info.volume != c.last_volume {
-                                            let avg_vol = info.volume.avg().0 as f32
-                                                / Volume::NORMAL.0 as f32;
-                                            c.last_volume = info.volume;
-                                            log(
-                                                "PULSE",
-                                                "PULSE".green(),
-                                                format!("External volume change: {:.3}", avg_vol),
-                                            );
-                                        }
-                                    }
-                                }
+                            if let pulse::callbacks::ListResult::Item(info) = res
+                                && info.volume != last_vol
+                                && let Ok(mut c) = cache_inner.lock()
+                                && info.volume != c.last_volume
+                            {
+                                let avg_vol = info.volume.avg().0 as f32 / Volume::NORMAL.0 as f32;
+                                c.last_volume = info.volume;
+                                log(
+                                    "PULSE",
+                                    "PULSE".green(),
+                                    format!("External volume change: {:.3}", avg_vol),
+                                );
                             }
                         });
                 }
@@ -282,13 +279,14 @@ async fn main() -> Result<()> {
 fn find_and_connect() -> Result<SerialStream> {
     let ports = serialport::available_ports().context("Failed to list serial ports")?;
     for p in ports {
-        if let serialport::SerialPortType::UsbPort(info) = p.port_type {
-            if info.vid == VID && info.pid == PID {
-                let stream = tokio_serial::new(p.port_name, 115_200)
-                    .open_native_async()
-                    .context("Failed to open serial port")?;
-                return Ok(stream);
-            }
+        if let serialport::SerialPortType::UsbPort(info) = p.port_type
+            && info.vid == VID
+            && info.pid == PID
+        {
+            let stream = tokio_serial::new(p.port_name, 115_200)
+                .open_native_async()
+                .context("Failed to open serial port")?;
+            return Ok(stream);
         }
     }
     anyhow::bail!("Device not found")
@@ -400,10 +398,10 @@ fn handle_message(msg: OutgoingMessage, pulse: Option<&Arc<Mutex<PulseController
             log("VOL", "VOL".blue(), format!("{} {:.3}", bar.blue(), value));
 
             // Update system volume
-            if let Some(p) = pulse {
-                if let Ok(mut p_guard) = p.lock() {
-                    p_guard.set_volume(value);
-                }
+            if let Some(p) = pulse
+                && let Ok(mut p_guard) = p.lock()
+            {
+                p_guard.set_volume(value);
             }
         }
         OutgoingMessage::Log { level, message } => {

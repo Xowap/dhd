@@ -6,6 +6,8 @@
 
 #![no_std]
 
+pub mod pid;
+
 use serde::{Deserialize, Serialize};
 
 /// Messages sent from the device to the host.

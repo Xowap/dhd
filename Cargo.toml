@@ -3,5 +3,6 @@ members = [
     "common",
     "firmware",
     "host",
+    "simulator",
 ]
 resolver = "2"
