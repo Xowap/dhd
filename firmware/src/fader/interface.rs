@@ -10,15 +10,14 @@ pub struct FaderInterface {
     pub state: &'static FaderState,
 }
 
-pub type Fader = FaderInterface;
-
 impl FaderInterface {
     pub fn new(pwm: Pwm<'static>, state: &'static FaderState) -> Self {
         Self { pwm, state }
     }
 
-    /// Set the motor speed directly without taking calibration into account.
-    /// This is used by the speed controller and the PID loop.
+    /// Set the motor speed directly.
+    /// Uses Slow Decay (Brake mode) to ensure the fader stops immediately and
+    /// precisely when the PID loop commands 0.0 or during PWM off-cycles.
     pub fn set_raw_speed(&mut self, speed: f32) {
         let speed = speed.clamp(-1.0, 1.0);
         let mut config = PwmConfig::default();
@@ -74,15 +73,15 @@ impl FaderInterface {
             i += 1;
         }
 
-        for i in 0..positions.len() {
+        for pos in &mut positions {
             self.state.sig_raw_changed.wait().await;
-            positions[i] = self.get_raw_pos();
+            *pos = self.get_raw_pos();
         }
 
         self.set_raw_speed(0.0);
         positions.sort_unstable();
 
-        return positions[(positions.len() - 1) / 2];
+        positions[(positions.len() - 1) / 2]
     }
 
     /// First rams the knob into one end at 0.5 speed (which we consider safe)
@@ -95,9 +94,9 @@ impl FaderInterface {
 
         self.set_raw_speed(speed);
 
-        for i in 0..samples.len() {
+        for sample in &mut samples {
             self.state.sig_raw_changed.wait().await;
-            samples[i] = self.get_raw_pos();
+            *sample = self.get_raw_pos();
         }
 
         self.set_raw_speed(0.0);

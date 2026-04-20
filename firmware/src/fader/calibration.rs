@@ -69,34 +69,9 @@ pub struct CalibrationResult {
     pub pid: PidCalibration,
 }
 
-impl CalibrationResult {
-    /// Creates a default calibration result with sensible values for initial operation.
-    pub const fn new() -> Self {
-        Self {
-            physical: PhysicalCalibration {
-                boundaries: Boundaries {
-                    min: 82,
-                    max: 4013,
-                    speed_scale: 1.0,
-                },
-                lowest_speed: 0.1,
-            },
-            pid: PidCalibration {
-                kp: 2.0,
-                ki: 0.1,
-                kd: 0.5,
-                alpha: 0.35,
-                deadband: 0.005,
-            },
-        }
-    }
-}
-
 impl CalibrationService {
     pub fn new(fader: FaderInterface) -> Self {
-        Self {
-            fader: Some(fader),
-        }
+        Self { fader: Some(fader) }
     }
 
     /// Explores the physical boundaries and stiction of the fader.

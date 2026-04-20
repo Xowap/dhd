@@ -55,7 +55,7 @@ async fn run_tx_loop(mut sender: Sender<'static, Driver<'static, USB>>, comms: &
             if let Ok(size) = serde_json_core::to_slice(&msg, &mut out_buf[..510]) {
                 out_buf[size] = b'\n';
                 let data = &out_buf[..size + 1];
-                
+
                 let mut error = false;
                 let mut last_chunk_size = 0;
                 for chunk in data.chunks(64) {
@@ -65,13 +65,13 @@ async fn run_tx_loop(mut sender: Sender<'static, Driver<'static, USB>>, comms: &
                         break;
                     }
                 }
-                if !error && last_chunk_size == 64 {
+                if !error && last_chunk_size == 64 && sender.write_packet(&[]).await.is_err() {
                     // Send a Zero-Length Packet (ZLP) to flush the 64-byte packet
-                    if sender.write_packet(&[]).await.is_err() {
-                        error = true;
-                    }
+                    error = true;
                 }
-                if error { break; }
+                if error {
+                    break;
+                }
             }
 
             // Proactively drain up to 20 more messages to improve throughput
@@ -89,12 +89,15 @@ async fn run_tx_loop(mut sender: Sender<'static, Driver<'static, USB>>, comms: &
                                 break;
                             }
                         }
-                        if !error && last_chunk_size == 64 {
-                            if sender.write_packet(&[]).await.is_err() {
-                                error = true;
-                            }
+                        if !error
+                            && last_chunk_size == 64
+                            && sender.write_packet(&[]).await.is_err()
+                        {
+                            error = true;
                         }
-                        if error { break; }
+                        if error {
+                            break;
+                        }
                     }
                 } else {
                     break;

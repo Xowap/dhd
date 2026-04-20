@@ -131,7 +131,7 @@ impl<H: PidHardware, const N: usize> PidController<H, N> {
 
         if self.was_driving {
             // Currently driving: stop only when we've clearly arrived AND we're not moving fast.
-            let vel_settled = velocity.abs() < 0.002 * range;
+            let vel_settled = velocity.abs() < 0.001 * range;
             if error.abs() < inner_band && vel_settled {
                 self.was_driving = false;
                 return false;
@@ -206,7 +206,7 @@ impl<H: PidHardware, const N: usize> PidController<H, N> {
     }
 
     /// Run a single control step: read measurement, compute output, write output.
-    pub async fn step(&mut self) {
+    pub async fn step(&mut self) -> f32 {
         let measurement = self.hardware.read_measurement().await;
         let (min_mag, max_mag) = self.hardware.gain_range();
         let (min_pos, max_pos) = self.hardware.measurement_range();
@@ -217,13 +217,14 @@ impl<H: PidHardware, const N: usize> PidController<H, N> {
 
         if !self.should_drive(error, velocity, range) {
             self.hardware.write_output(0.0).await;
-            return;
+            return measurement;
         }
 
         let effort = self.calculate_pid_effort(error, velocity, min_mag, max_mag);
         let output = self.apply_friction_mapping(effort, error.signum(), min_mag, max_mag);
 
         self.hardware.write_output(output).await;
+        measurement
     }
 
     /// Run the PID loop until the specified target is reached and stable.
@@ -235,11 +236,24 @@ impl<H: PidHardware, const N: usize> PidController<H, N> {
         self.set_target(target);
         self.reset_history();
 
-        // Initial step to engage the motor if we're far from the target.
-        self.step().await;
+        // Calculate the number of samples required for the EMA filter to fully settle
+        // (5 time constants gives > 99% settling). This dynamically adjusts the wait 
+        // time based on the calibrated system bandwidth, ensuring we only return when
+        // the mechanical plant has verifiably come to a complete physical halt.
+        let settle_samples = (5.0 / self.alpha) as u32 + 1;
+        let mut stable_count = 0;
 
-        while self.was_driving {
-            self.step().await;
+        loop {
+            let _ = self.step().await;
+
+            if !self.was_driving {
+                stable_count += 1;
+                if stable_count >= settle_samples {
+                    break;
+                }
+            } else {
+                stable_count = 0;
+            }
         }
 
         self.hardware.on_target_reached();

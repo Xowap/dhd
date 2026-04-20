@@ -11,6 +11,7 @@ pub mod pid;
 use serde::{Deserialize, Serialize};
 
 /// Messages sent from the device to the host.
+#[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Debug)]
 pub enum OutgoingMessage {
     /// Reports a change in the physical dial's position.
