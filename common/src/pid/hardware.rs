@@ -30,6 +30,10 @@ pub trait PidHardware {
     /// Return the system to its well-known "home" state (e.g. position 0).
     async fn home(&mut self);
 
+    /// Called when the controller has reached the target and the position is stable.
+    /// This can be used to wake up other tasks or signal completion.
+    fn on_target_reached(&mut self) {}
+
     /// Optional callback to report calibration progress to the user/host.
     fn on_calibrate_progress(&mut self, _msg: &str) {}
 }

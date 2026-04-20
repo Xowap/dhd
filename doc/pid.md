@@ -39,6 +39,10 @@ In physical terms, $k_a = 1/m$. Identifying this value accurately is the key to 
 
 The controller is implemented in `common/src/pid/controller.rs` as a modified PD+I loop.
 
+### 3.0 External API
+On top of the standard `run()` and `step()` methods, the controller provides:
+- **`run_until_target(target)`**: An async method that runs the PID loop until the target is reached and stable, then returns. It automatically notifies the hardware via `on_target_reached()`.
+
 ### 3.1 Derivative-on-Measurement (DoM)
 Standard PID applies the derivative term to the error ($D = K_d \cdot \frac{d(error)}{dt}$). This causes "setpoint kick" (a massive spike in output whenever the target changes).
 

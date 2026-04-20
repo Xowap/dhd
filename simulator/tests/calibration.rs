@@ -170,6 +170,9 @@ struct Actuator {
 
 impl PidHardware for Actuator {
     async fn read_measurement(&mut self) -> f32 {
+        // Yield to executor to prevent infinite loops from blocking the thread
+        tokio::task::yield_now().await;
+
         let mut s = self.s.borrow_mut();
         s.sample += 1;
         let m = s.sense();
@@ -371,6 +374,63 @@ async fn calibration_converges_on_wild_plants() {
     assert!(
         failures.len() <= max_failures,
         "Calibration failed on {}/{} seeds:\n{}",
+        failures.len(),
+        total,
+        failures.join("\n")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_until_target_detects_convergence() {
+    let seeds: Vec<u64> = (0..20).collect();
+    let mut failures: Vec<String> = Vec::new();
+
+    for seed in seeds {
+        let plant = Plant::for_seed(seed);
+        let state = Rc::new(RefCell::new(PlantState::new(plant, seed)));
+        let actuator = Actuator { s: state.clone() };
+
+        let mut pid = PidController::<Actuator, 1>::new(actuator, 1.0, 0.0, 0.0, 0.0);
+        pid.calibrate().await;
+
+        let target = 0.7;
+        let timeout_duration = std::time::Duration::from_secs(2);
+
+        // Run until target, wrapping in a timeout to prevent infinite loops
+        // from bad tuning or logic bugs.
+        let result = tokio::time::timeout(timeout_duration, pid.run_until_target(target)).await;
+
+        if result.is_err() {
+            failures.push(format!("seed={} plant={:?} err=timeout", seed, plant));
+            continue;
+        }
+
+        let s = state.borrow();
+        let final_err = (target - s.position).abs();
+        let final_vel = s.velocity.abs();
+
+        // Convergence criteria:
+        // Position should be very close to target (within 3%).
+        // Velocity should be near zero. Note: the controller's internal 'settled'
+        // threshold is 0.002 units/sample. For a dt of 0.005s, this is up to 0.4 units/sec.
+        let ok_err = final_err <= 0.03;
+        let ok_vel = final_vel <= 0.4; // physical units/sec
+
+        if !(ok_err && ok_vel) {
+            failures.push(format!(
+                "seed={} plant={:?} err={:.4} vel={:.4}",
+                seed, plant, final_err, final_vel
+            ));
+        }
+    }
+
+    // Same acceptable failure rate as the main test, since this relies on
+    // the same tuning parameters.
+    let total = 20;
+    let max_failures = 9;
+    assert!(
+        failures.len() <= max_failures,
+        "run_until_target failed to converge properly on {}/{} seeds:\n{}",
         failures.len(),
         total,
         failures.join("\n")

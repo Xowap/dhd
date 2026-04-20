@@ -40,7 +40,9 @@ struct SimulationState {
     // Noise
     noise_level: f32,
     running: bool,
+    pid_enabled: bool,
     calibrating: bool,
+    move_until_target: Option<f32>,
     calibration_msg: String,
 }
 
@@ -64,7 +66,9 @@ impl SimulationState {
             target: 0.5,
             noise_level: 0.01,
             running: true,
+            pid_enabled: true,
             calibrating: false,
+            move_until_target: None,
             calibration_msg: "Idle".to_string(),
         }
     }
@@ -165,20 +169,37 @@ async fn main() -> Result<(), io::Error> {
         let mut pid = PidController::<_, 50>::new(actuator, 2.0, 0.1, 0.5, 0.0);
 
         loop {
-            let (kp, ki, kd, kf, target, running, calibrate) = {
+            let (kp, ki, kd, kf, target, running, pid_enabled, calibrate, move_target) = {
                 let mut s = pid_state.lock().unwrap();
                 let c = s.calibrating;
                 if c {
                     s.calibrating = false;
                 }
-                (s.kp, s.ki, s.kd, s.kf, s.target, s.running, c)
+                let mt = s.move_until_target.take();
+                (
+                    s.kp,
+                    s.ki,
+                    s.kd,
+                    s.kf,
+                    s.target,
+                    s.running,
+                    s.pid_enabled,
+                    c,
+                    mt,
+                )
             };
 
             if !running {
                 break;
             }
 
-            if calibrate {
+            if let Some(t) = move_target {
+                pid.set_coefficients(kp, ki, kd, kf);
+                pid.run_until_target(t).await;
+                let mut s = pid_state.lock().unwrap();
+                s.pid_enabled = false;
+                s.calibration_msg = "Target reached. PID disabled.".to_string();
+            } else if calibrate {
                 pid.calibrate().await;
                 // Update shared state with new calibrated values
                 let mut s = pid_state.lock().unwrap();
@@ -188,10 +209,14 @@ async fn main() -> Result<(), io::Error> {
                 s.kf = pid.kf;
                 s.target = pid.target;
                 s.calibrating = false; // Ensure it's cleared
-            } else {
+                s.pid_enabled = true;
+            } else if pid_enabled {
                 pid.set_coefficients(kp, ki, kd, kf);
                 pid.set_target(target);
                 pid.step().await;
+            } else {
+                // PID disabled: just wait a bit and don't apply force
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }
     });
@@ -209,6 +234,14 @@ async fn main() -> Result<(), io::Error> {
                     break;
                 }
                 KeyCode::Char('c') => s.calibrating = true,
+                KeyCode::Char('x') => {
+                    let mut rng = rand::thread_rng();
+                    let target = rng.gen_range(0.0..1.0);
+                    s.target = target;
+                    s.move_until_target = Some(target);
+                    s.calibration_msg = format!("Moving to {:.2}...", target);
+                }
+                KeyCode::Char('p') => s.pid_enabled = !s.pid_enabled,
                 KeyCode::Char('w') => s.kp += 0.1,
                 KeyCode::Char('s') => s.kp -= 0.1,
                 KeyCode::Char('e') => s.ki += 0.01,
@@ -253,7 +286,8 @@ fn ui(f: &mut Frame, state: &Arc<Mutex<SimulationState>>) {
         .split(f.size());
 
     let title = Paragraph::new(format!(
-        "PID | Kp:{:.2} Ki:{:.2} Kd:{:.2} Kf:{:.2} | Target:{:.2} | C:Calibrate Space:Reset Q:Quit",
+        "PID [{}] | Kp:{:.2} Ki:{:.2} Kd:{:.2} Kf:{:.2} | Target:{:.2} | C:Calib X:RunOnce P:Toggle Space:Reset Q:Quit",
+        if s.pid_enabled { "ON" } else { "OFF" },
         s.kp, s.ki, s.kd, s.kf, s.target
     ))
     .block(Block::default().borders(Borders::ALL));
