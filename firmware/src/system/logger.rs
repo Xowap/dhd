@@ -12,7 +12,7 @@ impl log::Log for JsonLogger {
         if self.enabled(record.metadata()) {
             let mut level_str = String::<16>::new();
             let _ = core::fmt::write(&mut level_str, format_args!("{}", record.level()));
-            let mut msg_str = String::<128>::new();
+            let mut msg_str = String::<384>::new();
             let _ = core::fmt::write(&mut msg_str, format_args!("{}", record.args()));
             let _ = COMMS.chan_outgoing.try_send(OutgoingMessage::Log {
                 level: level_str,

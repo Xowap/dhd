@@ -40,10 +40,10 @@ pub struct PidController<H: PidHardware, const N: usize> {
     pub(super) filt_init: bool,
 
     /// EMA filter coefficient for position (0..1).
-    pub(super) alpha: f32,
+    pub alpha: f32,
 
     /// Deadband as a fraction of measurement range. Configured by calibration.
-    pub(super) deadband_frac: f32,
+    pub deadband_frac: f32,
 
     /// Hysteresis state: whether the motor was driven on the previous step.
     pub(super) was_driving: bool,

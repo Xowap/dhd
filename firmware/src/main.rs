@@ -105,14 +105,16 @@ async fn main(spawner: Spawner) {
                 SYSTEM.set_mode(SystemMode::Calibration);
             }
             SystemMode::Calibration => {
-                if let Some(result) = cal_svc.run_calibration().await {
-                    *FADER.calibration.lock().await = result;
-                    log::info!("Calibration complete.");
-                    SYSTEM.set_mode(SystemMode::Standby);
-                } else {
-                    log::error!("Calibration failed.");
-                    SYSTEM.set_mode(SystemMode::Failsafe);
-                }
+                log::info!("Starting physical calibration...");
+                let physical = cal_svc.run_physical_calibration().await;
+                FADER.calibration.lock().await.physical = physical;
+
+                log::info!("Starting PID calibration...");
+                let pid = cal_svc.run_pid_calibration().await;
+                FADER.calibration.lock().await.pid = pid;
+
+                log::info!("All calibrations complete.");
+                SYSTEM.set_mode(SystemMode::Standby);
             }
             SystemMode::Standby => {
                 embassy_futures::select::select(fader_svc.run(), SYSTEM.sig_start_calib.wait())

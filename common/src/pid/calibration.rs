@@ -211,12 +211,20 @@ impl<H: PidHardware, const N: usize> PidController<H, N> {
             let omega = omega_min * powf(omega_max / omega_min, frac);
             let score = self.try_bandwidth(omega, k_a, b_damp, dir, deadband).await;
 
-            let mut msg = heapless::String::<96>::new();
-            let _ = write!(
-                msg,
-                "w={:.3} iae={:.1} os={:.2} fin={:.3}",
-                omega, score.iae, score.overshoot, score.final_err
-            );
+            let mut msg = heapless::String::<64>::new();
+            let _ = write!(msg, "Trial w={:.3}", omega);
+            self.hardware.on_calibrate_progress(msg.as_str());
+            
+            msg.clear();
+            let _ = write!(msg, "  IAE={:.1}", score.iae);
+            self.hardware.on_calibrate_progress(msg.as_str());
+
+            msg.clear();
+            let _ = write!(msg, "  OS={:.3}", score.overshoot);
+            self.hardware.on_calibrate_progress(msg.as_str());
+
+            msg.clear();
+            let _ = write!(msg, "  Err={:.4}", score.final_err);
             self.hardware.on_calibrate_progress(msg.as_str());
 
             let s = score.scalar();
@@ -235,6 +243,15 @@ impl<H: PidHardware, const N: usize> PidController<H, N> {
                 let frac = (i as f32) / ((n_fine - 1) as f32);
                 let omega = lo * powf(hi / lo, frac);
                 let score = self.try_bandwidth(omega, k_a, b_damp, dir, deadband).await;
+
+                let mut msg = heapless::String::<64>::new();
+                let _ = write!(msg, "Fine w={:.3}", omega);
+                self.hardware.on_calibrate_progress(msg.as_str());
+                
+                msg.clear();
+                let _ = write!(msg, "  IAE={:.1} OS={:.3}", score.iae, score.overshoot);
+                self.hardware.on_calibrate_progress(msg.as_str());
+
                 let s = score.scalar();
                 if s < best_score {
                     best_score = s;
@@ -247,12 +264,12 @@ impl<H: PidHardware, const N: usize> PidController<H, N> {
         self.apply_gains(best_omega, k_a, b_damp);
         self.set_deadband(deadband);
 
-        let mut msg = heapless::String::<128>::new();
-        let _ = write!(
-            msg,
-            "Done w={:.3} L={:.0} ka={:.4} b={:.3} Kp={:.2} Kd={:.2} Ki={:.3}",
-            best_omega, l_samples, k_a, b_damp, self.kp, self.kd, self.ki
-        );
+        let mut msg = heapless::String::<64>::new();
+        let _ = write!(msg, "Calib Done: w={:.3}", best_omega);
+        self.hardware.on_calibrate_progress(msg.as_str());
+
+        msg.clear();
+        let _ = write!(msg, "  Kp={:.2} Kd={:.2} Ki={:.3}", self.kp, self.kd, self.ki);
         self.hardware.on_calibrate_progress(msg.as_str());
 
         // Final landing.

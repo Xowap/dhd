@@ -25,7 +25,7 @@ pub enum OutgoingMessage {
         /// The log level (e.g., "INFO", "WARN", "ERROR").
         level: heapless::String<16>,
         /// The formatted log message.
-        message: heapless::String<128>,
+        message: heapless::String<384>,
     },
     /// Responds to a host health check (Ping).
     #[serde(rename = "pong")]

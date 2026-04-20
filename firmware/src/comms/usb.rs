@@ -47,27 +47,54 @@ async fn run_rx_loop(
 }
 
 async fn run_tx_loop(mut sender: Sender<'static, Driver<'static, USB>>, comms: &'static CommsBus) {
-    let mut out_buf = [0u8; 258];
+    let mut out_buf = [0u8; 512];
     loop {
         sender.wait_connection().await;
         loop {
             let msg = comms.chan_outgoing.receive().await;
-            if let Ok(size) = serde_json_core::to_slice(&msg, &mut out_buf[..256]) {
+            if let Ok(size) = serde_json_core::to_slice(&msg, &mut out_buf[..510]) {
                 out_buf[size] = b'\n';
-                if sender.write_packet(&out_buf[..size + 1]).await.is_err() {
-                    break;
+                let data = &out_buf[..size + 1];
+                
+                let mut error = false;
+                let mut last_chunk_size = 0;
+                for chunk in data.chunks(64) {
+                    last_chunk_size = chunk.len();
+                    if sender.write_packet(chunk).await.is_err() {
+                        error = true;
+                        break;
+                    }
                 }
+                if !error && last_chunk_size == 64 {
+                    // Send a Zero-Length Packet (ZLP) to flush the 64-byte packet
+                    if sender.write_packet(&[]).await.is_err() {
+                        error = true;
+                    }
+                }
+                if error { break; }
             }
 
-            // Proactively drain up to 10 more messages to improve throughput
-            // but don't stay here forever to avoid starving the executor if many tasks are logging
-            for _ in 0..10 {
+            // Proactively drain up to 20 more messages to improve throughput
+            for _ in 0..20 {
                 if let Ok(queued_msg) = comms.chan_outgoing.try_receive() {
-                    if let Ok(size) = serde_json_core::to_slice(&queued_msg, &mut out_buf[..256]) {
+                    if let Ok(size) = serde_json_core::to_slice(&queued_msg, &mut out_buf[..510]) {
                         out_buf[size] = b'\n';
-                        if sender.write_packet(&out_buf[..size + 1]).await.is_err() {
-                            break;
+                        let data = &out_buf[..size + 1];
+                        let mut error = false;
+                        let mut last_chunk_size = 0;
+                        for chunk in data.chunks(64) {
+                            last_chunk_size = chunk.len();
+                            if sender.write_packet(chunk).await.is_err() {
+                                error = true;
+                                break;
+                            }
                         }
+                        if !error && last_chunk_size == 64 {
+                            if sender.write_packet(&[]).await.is_err() {
+                                error = true;
+                            }
+                        }
+                        if error { break; }
                     }
                 } else {
                     break;
@@ -117,8 +144,8 @@ fn handle_incoming_packet(
         }
         Ok((IncomingMessage::UpdateCalibration { bottom, top }, _)) => {
             if let Ok(mut cal) = fader.calibration.try_lock() {
-                cal.boundaries.min = bottom;
-                cal.boundaries.max = top;
+                cal.physical.boundaries.min = bottom;
+                cal.physical.boundaries.max = top;
             }
             fader.sig_range_updated.signal(());
         }

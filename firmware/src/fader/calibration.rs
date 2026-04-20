@@ -1,7 +1,9 @@
+use common::pid::{PidController, PidHardware};
+
 use crate::fader::interface::FaderInterface;
 
 pub struct CalibrationService {
-    fader: FaderInterface,
+    fader: Option<FaderInterface>,
 }
 
 /// Outcome of the boundaries calibration
@@ -37,9 +39,9 @@ impl Boundaries {
     }
 }
 
-/// Outcome of the calibration process
+/// Outcome of the physical boundaries calibration
 #[derive(Clone, Copy, Debug)]
-pub struct CalibrationResult {
+pub struct PhysicalCalibration {
     /// This way we know what are the min/max values to use on the
     /// potentiometer (to convert from the 0-100% scale to the physical scale
     /// and vice-versa).
@@ -50,42 +52,103 @@ pub struct CalibrationResult {
     pub lowest_speed: f32,
 }
 
+/// Outcome of the PID auto-calibration
+#[derive(Clone, Copy, Debug)]
+pub struct PidCalibration {
+    pub kp: f32,
+    pub ki: f32,
+    pub kd: f32,
+    pub alpha: f32,
+    pub deadband: f32,
+}
+
+/// Outcome of the calibration process
+#[derive(Clone, Copy, Debug)]
+pub struct CalibrationResult {
+    pub physical: PhysicalCalibration,
+    pub pid: PidCalibration,
+}
+
 impl CalibrationResult {
-    pub fn new() -> Self {
+    /// Creates a default calibration result with sensible values for initial operation.
+    pub const fn new() -> Self {
         Self {
-            boundaries: Boundaries {
-                min: 0,
-                max: 0,
-                speed_scale: 0.0,
+            physical: PhysicalCalibration {
+                boundaries: Boundaries {
+                    min: 82,
+                    max: 4013,
+                    speed_scale: 1.0,
+                },
+                lowest_speed: 0.1,
             },
-            lowest_speed: 0.0,
+            pid: PidCalibration {
+                kp: 2.0,
+                ki: 0.1,
+                kd: 0.5,
+                alpha: 0.35,
+                deadband: 0.005,
+            },
         }
     }
 }
 
 impl CalibrationService {
     pub fn new(fader: FaderInterface) -> Self {
-        Self { fader }
+        Self {
+            fader: Some(fader),
+        }
     }
 
-    /// Runs the calibration process, which gives the rest of the program a
-    /// clear knowledge of the system's physical parameters
-    pub async fn run_calibration(&mut self) -> Option<CalibrationResult> {
-        let mut out = CalibrationResult::new();
-        log::info!("Calibration starting...");
+    /// Explores the physical boundaries and stiction of the fader.
+    pub async fn run_physical_calibration(&mut self) -> PhysicalCalibration {
+        log::info!("Physical calibration starting...");
+        let fader = self.fader.as_mut().expect("Fader missing");
 
-        out.boundaries = self.find_boundaries(0.5).await;
-        log::info!(
-            "Boundaries: {} - {}",
-            out.boundaries.min,
-            out.boundaries.max
-        );
-        log::info!("Speed Scale: {}", out.boundaries.speed_scale);
+        let boundaries = Self::find_boundaries(fader, 0.5).await;
+        log::info!("Boundaries: {} - {}", boundaries.min, boundaries.max);
+        log::info!("Speed Scale: {}", boundaries.speed_scale);
 
-        out.lowest_speed = self.find_lowest_speed().await;
-        log::info!("Lowest speed: {}", out.lowest_speed);
+        let lowest_speed = Self::find_lowest_speed(fader).await;
+        log::info!("Lowest speed: {}", lowest_speed);
 
-        Some(out)
+        PhysicalCalibration {
+            boundaries,
+            lowest_speed,
+        }
+    }
+
+    /// Runs the PID auto-calibration.
+    /// This should be called AFTER the physical calibration has been applied
+    /// to the fader state.
+    pub async fn run_pid_calibration(&mut self) -> PidCalibration {
+        log::info!("PID calibration starting...");
+        let fader_owned = self.fader.take().expect("Fader missing");
+
+        log::info!("Starting PID autotune...");
+        let mut pid = PidController::<_, 50>::new(fader_owned, 0.0, 0.0, 0.0, 0.0);
+        pid.calibrate().await;
+
+        log::info!("PID calibration finished. Centering...");
+        pid.run_until_target(0.5).await;
+        log::info!("Centering done, relaxing motor.");
+        pid.hardware.write_output(0.0).await;
+
+        let res = PidCalibration {
+            kp: pid.kp,
+            ki: pid.ki,
+            kd: pid.kd,
+            alpha: pid.alpha,
+            deadband: pid.deadband_frac,
+        };
+
+        log::info!("Final Kp: {:.4}", res.kp);
+        log::info!("Final Ki: {:.4}", res.ki);
+        log::info!("Final Kd: {:.4}", res.kd);
+        log::info!("Final alpha: {:.4}", res.alpha);
+        log::info!("Final deadband: {:.4}", res.deadband);
+
+        self.fader = Some(pid.hardware);
+        res
     }
 
     /// Explores the boundaries of the potentiometer
@@ -93,9 +156,9 @@ impl CalibrationService {
     /// First we push in the positive speed direction, so `a` should be at the
     /// maximum value that the potentiometer will read. The vice-versa. If this
     /// is inverted, we need to invert speed.
-    async fn find_boundaries(&mut self, speed: f32) -> Boundaries {
-        let mut a = self.fader.drive_until_stall(speed).await;
-        let mut b = self.fader.drive_until_stall(-speed).await;
+    async fn find_boundaries(fader: &mut FaderInterface, speed: f32) -> Boundaries {
+        let mut a = fader.drive_until_stall(speed).await;
+        let mut b = fader.drive_until_stall(-speed).await;
         let mut s = 1.0;
 
         if a < b {
@@ -114,13 +177,13 @@ impl CalibrationService {
     /// lowest speed that manages to move the knob. We do this using a
     /// bisection algorithm, testing different values and seeing at which point
     /// it stops moving, with a precision of 0.01 (on the scale from 0 to 1).
-    async fn find_lowest_speed(&mut self) -> f32 {
+    async fn find_lowest_speed(fader: &mut FaderInterface) -> f32 {
         let mut left = 0.0;
         let mut right = 1.0;
 
         loop {
             let mid = (left + right) / 2.0;
-            if self.fader.moves_at_speed(mid).await {
+            if fader.moves_at_speed(mid).await {
                 right = mid;
             } else {
                 left = mid;

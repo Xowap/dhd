@@ -31,6 +31,7 @@ impl FaderService {
                 .calibration
                 .lock()
                 .await
+                .physical
                 .boundaries
                 .interpolate(last_raw);
 
