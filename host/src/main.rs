@@ -450,7 +450,7 @@ fn install() -> Result<()> {
     let target_exe = bin_dir.join("dhd");
     let data_dir = PathBuf::from(&home).join(".local/share/dhd/assets");
 
-    println!("Installing DHD...");
+    println!("\n{}", "🚀 Installing DHD (Dial Hifi Device)...".bold().cyan());
 
     // Create directories
     std::fs::create_dir_all(&bin_dir)?;
@@ -458,20 +458,31 @@ fn install() -> Result<()> {
 
     // Copy binary
     std::fs::copy(&current_exe, &target_exe)?;
-    println!("Binary installed to {}.", target_exe.display());
+    println!(
+        "{} Binary installed to {}",
+        "📦".green(),
+        target_exe.display().to_string().italic().dimmed()
+    );
 
     // Copy assets
     let assets_src = PathBuf::from("/home/remy/dev/dhd/host/assets");
     if assets_src.exists() {
+        let mut count = 0;
         for entry in std::fs::read_dir(assets_src)? {
             let entry = entry?;
             let path = entry.path();
             if path.is_file() {
                 let dest = data_dir.join(path.file_name().unwrap());
                 std::fs::copy(&path, &dest)?;
+                count += 1;
             }
         }
-        println!("Assets installed to {}.", data_dir.display());
+        println!(
+            "{} {} assets installed to {}",
+            "🎨".magenta(),
+            count,
+            data_dir.display().to_string().italic().dimmed()
+        );
     }
 
     // Setup autostart
@@ -494,9 +505,18 @@ X-GNOME-Autostart-enabled=true
     );
 
     std::fs::write(&desktop_file, desktop_content)?;
-    println!("Autostart configured at {}.", desktop_file.display());
+    println!(
+        "{} Autostart configured at {}",
+        "🔧".blue(),
+        desktop_file.display().to_string().italic().dimmed()
+    );
 
-    println!("Installation complete! DHD will now start automatically on login.");
+    println!(
+        "\n{}\n",
+        "✨ Installation complete! DHD will now start automatically on login."
+            .bold()
+            .green()
+    );
     Ok(())
 }
 
