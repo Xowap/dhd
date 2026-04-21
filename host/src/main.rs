@@ -30,14 +30,18 @@ const VID: u16 = 0x2e8a;
 /// Raspberry Pi Pico CDC-ACM Product ID.
 const PID: u16 = 0x000a;
 
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
 /// DHD (Dial Hifi Device) Host Tool
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// Set the log level for the device
     #[arg(short, long, value_enum, default_value_t = LogLevel::Info, env = "DHD_LOG")]
     log_level: LogLevel,
@@ -45,6 +49,14 @@ struct Args {
     /// Enable system tray icon and detach from terminal
     #[arg(short, long)]
     systray: bool,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Run the DHD host (default)
+    Run,
+    /// Install the DHD host to autostart
+    Install,
 }
 
 #[derive(ValueEnum, Clone, Debug, PartialEq, PartialOrd)]
@@ -105,7 +117,13 @@ impl ksni::Tray for DhdTray {
     }
 
     fn icon_theme_path(&self) -> String {
-        "/home/remy/dev/dhd/host/assets".into()
+        let home = std::env::var("HOME").unwrap_or_default();
+        let installed_path = PathBuf::from(home).join(".local/share/dhd/assets");
+        if installed_path.exists() {
+            installed_path.to_string_lossy().into_owned()
+        } else {
+            "/home/remy/dev/dhd/host/assets".into()
+        }
     }
 
     fn icon_name(&self) -> String {
@@ -400,27 +418,89 @@ impl PulseController {
 }
 
 fn main() -> Result<()> {
-    let args = Args::parse();
+    let cli = Cli::parse();
 
-    if args.systray {
-        let stdout = std::fs::File::create("/tmp/dhd-host.out")?;
-        let stderr = std::fs::File::create("/tmp/dhd-host.err")?;
+    match cli.command {
+        Some(Commands::Install) => install(),
+        _ => {
+            if cli.systray {
+                let stdout = std::fs::File::create("/tmp/dhd-host.out")?;
+                let stderr = std::fs::File::create("/tmp/dhd-host.err")?;
 
-        let daemonize = daemonize::Daemonize::new().stdout(stdout).stderr(stderr);
+                let daemonize = daemonize::Daemonize::new().stdout(stdout).stderr(stderr);
 
-        match daemonize.start() {
-            Ok(_) => println!("Success, daemonized"),
-            Err(e) => eprintln!("Error, {}", e),
+                match daemonize.start() {
+                    Ok(_) => println!("Success, daemonized"),
+                    Err(e) => eprintln!("Error, {}", e),
+                }
+            }
+
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?
+                .block_on(run(cli))
         }
     }
-
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?
-        .block_on(run(args))
 }
 
-async fn run(args: Args) -> Result<()> {
+fn install() -> Result<()> {
+    let current_exe = std::env::current_exe().context("Failed to get current executable path")?;
+    let home = std::env::var("HOME").context("Failed to get HOME environment variable")?;
+    let bin_dir = PathBuf::from(&home).join(".local/bin");
+    let target_exe = bin_dir.join("dhd");
+    let data_dir = PathBuf::from(&home).join(".local/share/dhd/assets");
+
+    println!("Installing DHD...");
+
+    // Create directories
+    std::fs::create_dir_all(&bin_dir)?;
+    std::fs::create_dir_all(&data_dir)?;
+
+    // Copy binary
+    std::fs::copy(&current_exe, &target_exe)?;
+    println!("Binary installed to {}.", target_exe.display());
+
+    // Copy assets
+    let assets_src = PathBuf::from("/home/remy/dev/dhd/host/assets");
+    if assets_src.exists() {
+        for entry in std::fs::read_dir(assets_src)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() {
+                let dest = data_dir.join(path.file_name().unwrap());
+                std::fs::copy(&path, &dest)?;
+            }
+        }
+        println!("Assets installed to {}.", data_dir.display());
+    }
+
+    // Setup autostart
+    let autostart_dir = PathBuf::from(&home).join(".config/autostart");
+    std::fs::create_dir_all(&autostart_dir)?;
+
+    let desktop_file = autostart_dir.join("dhd.desktop");
+    let desktop_content = format!(
+        r#"[Desktop Entry]
+Type=Application
+Name=DHD Host
+Exec={} --systray
+Icon=audio-ready
+Comment=Dial Hifi Device Host
+Terminal=false
+Categories=Settings;HardwareSettings;
+X-GNOME-Autostart-enabled=true
+"#,
+        target_exe.display()
+    );
+
+    std::fs::write(&desktop_file, desktop_content)?;
+    println!("Autostart configured at {}.", desktop_file.display());
+
+    println!("Installation complete! DHD will now start automatically on login.");
+    Ok(())
+}
+
+async fn run(args: Cli) -> Result<()> {
     println!("{}", "=== DHD Host Starting ===".bold().cyan());
 
     let (sig_tx, sig_rx) = mpsc::unbounded_channel();
@@ -534,7 +614,7 @@ async fn run_host(
     pulse: Option<Arc<Mutex<PulseController>>>,
     vol_rx: &mut Option<mpsc::UnboundedReceiver<f32>>,
     sig_rx: &mut Option<mpsc::UnboundedReceiver<()>>,
-    args: &Args,
+    args: &Cli,
     mode: &Arc<AtomicU32>,
     tray_handle: &Option<ksni::Handle<DhdTray>>,
 ) -> Result<()> {
@@ -691,7 +771,7 @@ async fn run_host(
 fn handle_message(
     msg: OutgoingMessage,
     pulse: Option<&Arc<Mutex<PulseController>>>,
-    args: &Args,
+    args: &Cli,
     mode: &Arc<AtomicU32>,
     tray_handle: &Option<ksni::Handle<DhdTray>>,
 ) {
