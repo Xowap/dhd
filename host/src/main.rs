@@ -132,12 +132,7 @@ impl ksni::Tray for DhdTray {
             .join(".local/share/dhd/assets")
             .join(format!("{}.svg", name));
 
-        if installed_path.exists() {
-            installed_path.to_string_lossy().into_owned()
-        } else {
-            // Fallback for development
-            format!("/home/remy/dev/dhd/host/assets/{}.svg", name)
-        }
+        installed_path.to_string_lossy().into_owned()
     }
 
     fn title(&self) -> String {
@@ -444,25 +439,37 @@ fn install() -> Result<()> {
     std::fs::create_dir_all(&autostart_dir)?;
     std::fs::create_dir_all(&apps_dir)?;
     std::fs::create_dir_all(&icons_dir)?;
-    std::fs::copy(&current_exe, &target_exe)?;
-    let assets_src = PathBuf::from("/home/remy/dev/dhd/host/assets");
+    
+    if current_exe.canonicalize().unwrap_or_else(|_| current_exe.clone()) != target_exe.canonicalize().unwrap_or_else(|_| target_exe.clone()) {
+        let _ = std::fs::remove_file(&target_exe);
+        std::fs::copy(&current_exe, &target_exe)?;
+    }
+
+    const ASSETS: &[(&str, &[u8])] = &[
+        ("dhd-auto.svg", include_bytes!("../assets/dhd-auto.svg")),
+        ("dhd-calib.svg", include_bytes!("../assets/dhd-calib.svg")),
+        ("dhd-error.svg", include_bytes!("../assets/dhd-error.svg")),
+        ("dhd-hand.svg", include_bytes!("../assets/dhd-hand.svg")),
+        ("dhd-init.svg", include_bytes!("../assets/dhd-init.svg")),
+        (
+            "dhd-offline.svg",
+            include_bytes!("../assets/dhd-offline.svg"),
+        ),
+        ("dhd-ready.svg", include_bytes!("../assets/dhd-ready.svg")),
+    ];
+
     let mut asset_count = 0;
-    if assets_src.exists() {
-        for entry in std::fs::read_dir(assets_src)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() {
-                let dest = data_dir.join(path.file_name().unwrap());
-                std::fs::copy(&path, &dest)?;
-                asset_count += 1;
-            }
+    for (name, content) in ASSETS {
+        let dest = data_dir.join(name);
+        std::fs::write(&dest, content)?;
+        asset_count += 1;
+
+        if *name == "dhd-ready.svg" {
+            let icon_file = icons_dir.join("dhd.svg");
+            std::fs::write(&icon_file, content)?;
         }
     }
-    let icon_file = icons_dir.join("dhd.svg");
-    let main_icon_src = PathBuf::from("/home/remy/dev/dhd/host/assets/dhd-ready.svg");
-    if main_icon_src.exists() {
-        std::fs::copy(&main_icon_src, &icon_file)?;
-    }
+
     let desktop_content = format!(
         r#"[Desktop Entry]
 Type=Application
