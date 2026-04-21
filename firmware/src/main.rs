@@ -66,7 +66,7 @@ pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     let _ = log::set_logger(&LOGGER);
-    log::set_max_level(log::LevelFilter::Info);
+    log::set_max_level(log::LevelFilter::Trace);
 
     // USB Driver Setup
     let driver = Driver::new(p.USB, Irqs);
@@ -188,7 +188,7 @@ async fn handle_calibration(
 
     let pid_cal = FADER.calibration.lock().await.pid;
     let target: f32 = FADER.target_volume_ppm.load(Ordering::Relaxed) as f32 / 1_000_000.0;
-    log::info!("Moving to final target: {:.2}", target);
+    log::debug!("Moving to final target: {:.2}", target);
 
     let hw = cal_svc.take_fader();
     let mut pid = PidController::<_, 50>::new(hw, pid_cal.kp, pid_cal.ki, pid_cal.kd, 0.0);

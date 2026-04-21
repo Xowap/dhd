@@ -89,11 +89,11 @@ impl CalibrationService {
         let fader = self.fader.as_mut().expect("Fader missing");
 
         let boundaries = Self::find_boundaries(fader, 0.5).await;
-        log::info!("Boundaries: {} - {}", boundaries.min, boundaries.max);
-        log::info!("Speed Scale: {}", boundaries.speed_scale);
+        log::debug!("Boundaries: {} - {}", boundaries.min, boundaries.max);
+        log::debug!("Speed Scale: {}", boundaries.speed_scale);
 
         let lowest_speed = Self::find_lowest_speed(fader).await;
-        log::info!("Lowest speed: {}", lowest_speed);
+        log::debug!("Lowest speed: {}", lowest_speed);
 
         PhysicalCalibration {
             boundaries,
@@ -108,7 +108,7 @@ impl CalibrationService {
         log::info!("PID calibration starting...");
         let fader_owned = self.fader.take().expect("Fader missing");
 
-        log::info!("Starting PID autotune...");
+        log::debug!("Starting PID autotune...");
         let mut pid = PidController::<_, 50>::new(fader_owned, 0.0, 0.0, 0.0, 0.0);
         pid.calibrate().await;
 
@@ -120,11 +120,11 @@ impl CalibrationService {
             deadband: pid.deadband_frac,
         };
 
-        log::info!("Final Kp: {:.4}", res.kp);
-        log::info!("Final Ki: {:.4}", res.ki);
-        log::info!("Final Kd: {:.4}", res.kd);
-        log::info!("Final alpha: {:.4}", res.alpha);
-        log::info!("Final deadband: {:.4}", res.deadband);
+        log::debug!("Final Kp: {:.4}", res.kp);
+        log::debug!("Final Ki: {:.4}", res.ki);
+        log::debug!("Final Kd: {:.4}", res.kd);
+        log::debug!("Final alpha: {:.4}", res.alpha);
+        log::debug!("Final deadband: {:.4}", res.deadband);
 
         self.fader = Some(pid.hardware);
         res

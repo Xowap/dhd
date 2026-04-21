@@ -62,7 +62,7 @@ pub async fn load_calibration(
     // We use addr_of_mut! to satisfy Rust 2024 safety requirements.
     let buf = unsafe { &mut *core::ptr::addr_of_mut!(FLASH_BUF.0) };
 
-    log::info!("Loading calibration from address 0x{:x}", storage_addr);
+    log::debug!("Loading calibration from address 0x{:x}", storage_addr);
 
     // Read the header (first 16 bytes)
     if let Err(e) = flash.read(offset, &mut buf[..16]).await {
@@ -149,7 +149,7 @@ pub async fn store_calibration(
             buf[8..12].copy_from_slice(&checksum.to_le_bytes());
             buf[12..16].copy_from_slice(&(len as u32).to_le_bytes());
 
-            log::info!(
+            log::debug!(
                 "Persisting calibration to 0x{:x} ({} bytes, CRC: 0x{:08x})",
                 storage_addr,
                 len,

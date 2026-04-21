@@ -30,6 +30,38 @@ const PID: u16 = 0x000a;
 
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
+use clap::{Parser, ValueEnum};
+
+/// DHD (Dial Hifi Device) Host Tool
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Set the log level for the device
+    #[arg(short, long, value_enum, default_value_t = LogLevel::Info, env = "DHD_LOG")]
+    log_level: LogLevel,
+}
+
+#[derive(ValueEnum, Clone, Debug, PartialEq, PartialOrd)]
+enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "ERROR" => LogLevel::Error,
+            "WARN" => LogLevel::Warn,
+            "INFO" => LogLevel::Info,
+            "DEBUG" => LogLevel::Debug,
+            "TRACE" => LogLevel::Trace,
+            _ => LogLevel::Info,
+        }
+    }
+}
 
 /// PulseAudio events we want to handle.
 enum PulseEvent {
@@ -268,6 +300,7 @@ impl PulseController {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
     println!("{}", "=== DHD Host Starting ===".bold().cyan());
 
     let (pulse, pulse_rx, mut vol_rx) = match PulseController::new() {
@@ -312,7 +345,7 @@ async fn main() -> Result<()> {
             Ok(stream) => {
                 log("DEVICE", "DEVICE".green(), "Connected to DHD device!");
                 let framed = Framed::new(stream, LinesCodec::new());
-                if let Err(e) = run_host(framed, pulse.clone(), &mut vol_rx, &mut sig_rx).await {
+                if let Err(e) = run_host(framed, pulse.clone(), &mut vol_rx, &mut sig_rx, &args).await {
                     log("DEVICE", "DEVICE".red(), format!("Connection lost: {}", e));
                 }
             }
@@ -346,6 +379,7 @@ async fn run_host(
     pulse: Option<Arc<Mutex<PulseController>>>,
     vol_rx: &mut Option<mpsc::UnboundedReceiver<f32>>,
     sig_rx: &mut Option<mpsc::UnboundedReceiver<()>>,
+    args: &Args,
 ) -> Result<()> {
     // Initial handshake
     let handshake = IncomingMessage::Handshake {
@@ -388,7 +422,7 @@ async fn run_host(
                     OutgoingMessage::Log { .. }
                     | OutgoingMessage::Volume { .. }
                     | OutgoingMessage::Mode { .. } => {
-                        handle_message(msg, pulse.as_ref());
+                        handle_message(msg, pulse.as_ref(), args);
                     }
                     OutgoingMessage::Pong { .. } => {
                         // Ignore pongs during handshake phase
@@ -477,7 +511,7 @@ async fn run_host(
                                 missed_pings = 0;
                             }
                         } else {
-                            handle_message(msg, pulse.as_ref());
+                            handle_message(msg, pulse.as_ref(), args);
                         }
                     }
                     Err(e) => {
@@ -497,7 +531,7 @@ async fn run_host(
 }
 
 /// Dispatches an incoming `OutgoingMessage` to the appropriate display logic.
-fn handle_message(msg: OutgoingMessage, pulse: Option<&Arc<Mutex<PulseController>>>) {
+fn handle_message(msg: OutgoingMessage, pulse: Option<&Arc<Mutex<PulseController>>>, args: &Args) {
     match msg {
         OutgoingMessage::Volume { value } => {
             let bar_len = (value * 20.0).clamp(0.0, 20.0) as usize;
@@ -512,10 +546,17 @@ fn handle_message(msg: OutgoingMessage, pulse: Option<&Arc<Mutex<PulseController
             }
         }
         OutgoingMessage::Log { level, message } => {
+            let msg_level = LogLevel::from_str(level.as_str());
+            if msg_level > args.log_level {
+                return;
+            }
+
             let lvl = match level.as_str() {
                 "INFO" => "INFO".green(),
                 "WARN" => "WARN".yellow(),
                 "ERROR" => "ERROR".red(),
+                "DEBUG" => "DEBUG".blue(),
+                "TRACE" => "TRACE".magenta(),
                 _ => level.as_str().normal(),
             };
             log("LOG", "LOG".white(), format!("[{}] {}", lvl, message));

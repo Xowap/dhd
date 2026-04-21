@@ -48,7 +48,7 @@ impl FaderInterface {
     /// Then we shut down the motor (which creates lots of noise) and measure
     /// the stable position.
     pub async fn drive_until_stall(&mut self, speed: f32) -> u16 {
-        log::info!("Driving until stall: speed={:.2}", speed);
+        log::debug!("Driving until stall: speed={:.2}", speed);
         self.set_raw_speed(speed);
 
         let mut positions = [0u16; 101];
@@ -163,10 +163,10 @@ impl PidHardware for FaderInterface {
     }
 
     fn on_target_reached(&mut self) {
-        log::info!("Target reached");
+        log::debug!("Target reached");
     }
 
     fn on_calibrate_progress(&mut self, msg: &str) {
-        log::info!("{}", msg);
+        log::debug!("{}", msg);
     }
 }

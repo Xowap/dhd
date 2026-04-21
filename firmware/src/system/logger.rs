@@ -5,8 +5,8 @@ use heapless::String;
 pub struct JsonLogger;
 
 impl log::Log for JsonLogger {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
     }
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
