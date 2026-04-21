@@ -28,6 +28,7 @@ const VID: u16 = 0x2e8a;
 /// Raspberry Pi Pico CDC-ACM Product ID.
 const PID: u16 = 0x000a;
 
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
 /// PulseAudio events we want to handle.
@@ -66,12 +67,12 @@ fn log(_tag: &str, color: ColoredString, message: impl AsRef<str>) {
 }
 
 impl PulseController {
-    /// Creates a new `PulseController` instance, establishing a connection to 
+    /// Creates a new `PulseController` instance, establishing a connection to
     /// the PulseAudio server.
     ///
-    /// It spins up a threaded mainloop and subscribes to server and sink events 
-    /// to track changes to the default audio output device. It also returns two 
-    /// receiver channels: one for raw PulseAudio events, and one specifically 
+    /// It spins up a threaded mainloop and subscribes to server and sink events
+    /// to track changes to the default audio output device. It also returns two
+    /// receiver channels: one for raw PulseAudio events, and one specifically
     /// for external volume changes.
     fn new() -> Result<(
         Self,
@@ -177,8 +178,8 @@ impl PulseController {
         }
     }
 
-    /// Dispatches a raw PulseAudio event, updating the internal cache if the 
-    /// default sink changes or if its volume is modified externally. Emits the 
+    /// Dispatches a raw PulseAudio event, updating the internal cache if the
+    /// default sink changes or if its volume is modified externally. Emits the
     /// new volume to the `vol_tx` channel if changed.
     pub fn handle_event(&mut self, event: PulseEvent) {
         self.mainloop.lock();
@@ -226,7 +227,7 @@ impl PulseController {
         self.mainloop.unlock();
     }
 
-    /// Updates the system volume for the default sink to the specified 
+    /// Updates the system volume for the default sink to the specified
     /// normalized value (0.0 to 1.0).
     fn set_volume(&mut self, value: f32) {
         let vol = Volume((Volume::NORMAL.0 as f32 * value) as u32);
@@ -254,7 +255,7 @@ impl PulseController {
         self.mainloop.unlock();
     }
 
-    /// Retrieves the current normalized volume (0.0 to 1.0) of the default 
+    /// Retrieves the current normalized volume (0.0 to 1.0) of the default
     /// sink from the cache.
     fn get_volume(&self) -> f32 {
         let last_vol = {
@@ -291,12 +292,27 @@ async fn main() -> Result<()> {
         });
     }
 
+    let (sig_tx, sig_rx) = mpsc::unbounded_channel();
+    let mut sig_usr1 = signal(SignalKind::user_defined1())?;
+    tokio::spawn(async move {
+        while sig_usr1.recv().await.is_some() {
+            log(
+                "HOST",
+                "HOST".yellow(),
+                "Received SIGUSR1 - Triggering hard calibration",
+            );
+            let _ = sig_tx.send(());
+        }
+    });
+
+    let mut sig_rx = Some(sig_rx);
+
     loop {
         match find_and_connect() {
             Ok(stream) => {
                 log("DEVICE", "DEVICE".green(), "Connected to DHD device!");
                 let framed = Framed::new(stream, LinesCodec::new());
-                if let Err(e) = run_host(framed, pulse.clone(), &mut vol_rx).await {
+                if let Err(e) = run_host(framed, pulse.clone(), &mut vol_rx, &mut sig_rx).await {
                     log("DEVICE", "DEVICE".red(), format!("Connection lost: {}", e));
                 }
             }
@@ -329,6 +345,7 @@ async fn run_host(
     mut framed: Framed<SerialStream, LinesCodec>,
     pulse: Option<Arc<Mutex<PulseController>>>,
     vol_rx: &mut Option<mpsc::UnboundedReceiver<f32>>,
+    sig_rx: &mut Option<mpsc::UnboundedReceiver<()>>,
 ) -> Result<()> {
     // Initial handshake
     let handshake = IncomingMessage::Handshake {
@@ -338,6 +355,7 @@ async fn run_host(
     framed.send(j).await?;
 
     // Send initial volume to the device immediately after handshake
+    // This also acts as a "soft calibration" request.
     if let Some(p) = pulse.clone() {
         let vol = if let Ok(p_guard) = p.lock() {
             Some(p_guard.get_volume())
@@ -346,7 +364,10 @@ async fn run_host(
         };
 
         if let Some(v) = vol {
-            let set_vol = IncomingMessage::StartCalibration { volume: v };
+            let set_vol = IncomingMessage::StartCalibration {
+                volume: v,
+                force: false,
+            };
             let j = serde_json::to_string(&set_vol)?;
             framed.send(j).await?;
         }
@@ -409,6 +430,30 @@ async fn run_host(
                 }
             } => {
                 let set_vol = IncomingMessage::SetVolume { value: vol };
+                if let Ok(j) = serde_json::to_string(&set_vol) {
+                    let _ = framed.send(j).await;
+                }
+            }
+            Some(_) = async {
+                if let Some(rx) = sig_rx.as_mut() {
+                    rx.recv().await
+                } else {
+                    futures::future::pending().await
+                }
+            } => {
+                let vol = if let Some(p) = pulse.as_ref() {
+                    if let Ok(p_guard) = p.lock() {
+                        p_guard.get_volume()
+                    } else {
+                        0.5
+                    }
+                } else {
+                    0.5
+                };
+                let set_vol = IncomingMessage::StartCalibration {
+                    volume: vol,
+                    force: true,
+                };
                 if let Ok(j) = serde_json::to_string(&set_vol) {
                     let _ = framed.send(j).await;
                 }

@@ -4,14 +4,14 @@ use micromath::F32Ext;
 
 /// Background task responsible for converting raw ADC values into logical volume.
 ///
-/// This task listens for stable, filtered raw ADC values 
-/// (`sig_stable_raw_changed`) and recalibrates them using the dynamically 
+/// This task listens for stable, filtered raw ADC values
+/// (`sig_stable_raw_changed`) and recalibrates them using the dynamically
 /// updated physical boundaries.
 ///
-/// To prevent ADC noise from causing rapid downstream mode switching, the 
-/// interpolated volume is strictly rounded to the nearest 1% before being 
-/// stored in `volume_ppm`. Finally, it emits `sig_vol_changed` to alert the 
-/// rest of the system (like the orchestrator or the reporter task) that a new, 
+/// To prevent ADC noise from causing rapid downstream mode switching, the
+/// interpolated volume is strictly rounded to the nearest 1% before being
+/// stored in `volume_ppm`. Finally, it emits `sig_vol_changed` to alert the
+/// rest of the system (like the orchestrator or the reporter task) that a new,
 /// processed logical volume is available.
 #[embassy_executor::task]
 pub async fn fader_task(state: &'static FaderState) {

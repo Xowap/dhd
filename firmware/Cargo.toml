@@ -28,7 +28,7 @@ embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
 embassy-usb = { git = "https://github.com/embassy-rs/embassy" }
 embassy-futures = { git = "https://github.com/embassy-rs/embassy" }
 
-cortex-m = { version = "0.7.6" }
+cortex-m = { version = "0.7.7" }
 cortex-m-rt = "0.7.5"
 
 log = "0.4"
@@ -37,3 +37,4 @@ static_cell = "2.1"
 serde-json-core = "0.6.0"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 heapless = { version = "0.8", features = ["serde"] }
+embedded-storage-async = "0.4.1"

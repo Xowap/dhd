@@ -38,18 +38,18 @@ impl FaderState {
             calibration: Mutex::new(CalibrationResult {
                 physical: calibration::PhysicalCalibration {
                     boundaries: calibration::Boundaries {
-                        min: 82,
-                        max: 4013,
+                        min: 0,
+                        max: 0,
                         speed_scale: 1.0,
                     },
-                    lowest_speed: 0.1,
+                    lowest_speed: 0.0,
                 },
                 pid: calibration::PidCalibration {
-                    kp: 2.0,
-                    ki: 0.1,
-                    kd: 0.5,
-                    alpha: 0.35,
-                    deadband: 0.005,
+                    kp: 0.0,
+                    ki: 0.0,
+                    kd: 0.0,
+                    alpha: 0.0,
+                    deadband: 0.0,
                 },
             }),
             sig_raw_changed: Signal::new(),

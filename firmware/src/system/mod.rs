@@ -4,12 +4,13 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 
 pub mod logger;
+pub mod storage;
 
 /// State and signals for device-level coordination.
 pub struct SystemState {
     mode: AtomicU32,
     /// Fired when the host or system requests a calibration run.
-    pub sig_start_calib: Signal<CriticalSectionRawMutex, ()>,
+    pub sig_start_calib: Signal<CriticalSectionRawMutex, bool>,
     /// Fired when the initial handshake with the host is completed.
     pub sig_handshake_done: Signal<CriticalSectionRawMutex, ()>,
     /// Fired when the system mode has changed.

@@ -150,11 +150,11 @@ fn handle_incoming_packet(
                 .try_send(OutgoingMessage::Handshake { message: res });
             system.sig_handshake_done.signal(());
         }
-        Ok((IncomingMessage::StartCalibration { volume }, _)) => {
+        Ok((IncomingMessage::StartCalibration { volume, force }, _)) => {
             fader
                 .target_volume_ppm
                 .store((volume * 1_000_000.0) as u32, Ordering::Relaxed);
-            system.sig_start_calib.signal(());
+            system.sig_start_calib.signal(force);
         }
         Ok((IncomingMessage::UpdateCalibration { bottom, top }, _)) => {
             if let Ok(mut cal) = fader.calibration.try_lock() {

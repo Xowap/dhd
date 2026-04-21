@@ -95,6 +95,9 @@ pub enum IncomingMessage {
     StartCalibration {
         /// Initial volume to set after calibration.
         volume: f32,
+        /// If true, force a full re-calibration even if data is stored.
+        #[serde(default)]
+        force: bool,
     },
     /// Sets the volume of the device from the host.
     #[serde(rename = "set_volume")]

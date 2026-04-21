@@ -1,4 +1,5 @@
 use common::pid::PidController;
+use serde::{Deserialize, Serialize};
 
 use crate::fader::interface::FaderInterface;
 
@@ -7,7 +8,7 @@ pub struct CalibrationService {
 }
 
 /// Outcome of the boundaries calibration
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Boundaries {
     /// Minimum value that you will read on the potentiometer
     pub min: u16,
@@ -40,7 +41,7 @@ impl Boundaries {
 }
 
 /// Outcome of the physical boundaries calibration
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct PhysicalCalibration {
     /// This way we know what are the min/max values to use on the
     /// potentiometer (to convert from the 0-100% scale to the physical scale
@@ -53,7 +54,7 @@ pub struct PhysicalCalibration {
 }
 
 /// Outcome of the PID auto-calibration
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct PidCalibration {
     pub kp: f32,
     pub ki: f32,
@@ -63,7 +64,7 @@ pub struct PidCalibration {
 }
 
 /// Outcome of the calibration process
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct CalibrationResult {
     pub physical: PhysicalCalibration,
     pub pid: PidCalibration,

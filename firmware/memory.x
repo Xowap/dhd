@@ -1,10 +1,12 @@
 MEMORY {
     /*
      * The RP2350 has either external or internal flash.
-     *
-     * 2 MiB is a safe default here, although a Pico 2 has 4 MiB.
+     * Pico 2 has 4 MiB, but we use a conservative 2 MiB layout to be safe.
+     * We carve out the last 4KB sector for dedicated persistent storage.
      */
-    FLASH : ORIGIN = 0x10000000, LENGTH = 2048K
+    FLASH : ORIGIN = 0x10000000, LENGTH = 2044K
+    STORAGE : ORIGIN = 0x101FF000, LENGTH = 4K
+
     /*
      * RAM consists of 8 banks, SRAM0-SRAM7, with a striped mapping.
      * This is usually good for performance, as it distributes load on
@@ -68,6 +70,14 @@ SECTIONS {
         __end_block_addr = .;
         KEEP(*(.end_block));
     } > FLASH
+
+    .storage : ALIGN(4096)
+    {
+        __storage_start = .;
+        KEEP(*(.storage));
+        . = ALIGN(4096);
+        __storage_end = .;
+    } > STORAGE
 
 } INSERT AFTER .uninit;
 
