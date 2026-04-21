@@ -110,6 +110,34 @@ Sent from **Host → Device** to move the fader to a specific logical position.
     ```
 - **System Impact**: Transitions the device to `LogicallyDriven` mode.
 
+### 9. Mode Update (`mode`)
+
+Sent from **Device → Host** to report a change in the system mode.
+
+- **Payload**:
+    ```json
+    { "mode": { "mode": "Standby" } }
+    ```
+- **Modes**: `Init`, `Calibration`, `Standby`, `Failsafe`, `PhysicallyDriven`,
+  `LogicallyDriven`
+- **System Impact**: Allows the host to track the current operational state of
+  the device.
+
+### 10. Update Calibration (`update_calibration`)
+
+Sent from **Host → Device** to manually update the potentiometer calibration
+range.
+
+- **Payload**:
+    ```json
+    { "update_calibration": { "bottom": 100, "top": 4000 } }
+    ```
+- **Fields**:
+    - `bottom`: The new minimum raw ADC value.
+    - `top`: The new maximum raw ADC value.
+- **System Impact**: The device updates its physical boundaries and applies the
+  new range immediately.
+
 ## Communication Sequences
 
 ### Volume Adjustment

@@ -21,15 +21,6 @@ the wiper.
 - The firmware includes software-based median filtering and hysteresis to ensure
   stable readings even with noisy potentiometers.
 
-## Status LED
-
-The device uses the onboard LED (or an external one connected to the same pin)
-to indicate power status.
-
-| Component   | Pico Pin | Function        |
-| ----------- | -------- | --------------- |
-| Onboard LED | **GP25** | Power Indicator |
-
 ## USB Connection
 
 The device connects to the host computer via the micro-USB or USB-C port

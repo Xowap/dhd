@@ -53,6 +53,19 @@ From the project root:
 cargo run -p dhd
 ```
 
+#### Command-Line Arguments
+
+The host tool accepts several arguments:
+
+- `-l, --log-level <LEVEL>`: Set the log level for the device (ERROR, WARN,
+  INFO, DEBUG, TRACE). Default is INFO.
+- `-s, --systray`: Enable the system tray icon and detach from the terminal.
+
+#### Subcommands
+
+- `run`: Run the DHD host (default).
+- `install`: Install the DHD host to autostart and the system menu.
+
 #### Commands & Signals
 
 - **SIGUSR1**: Send `SIGUSR1` to the `dhd` process to trigger a **Hard
