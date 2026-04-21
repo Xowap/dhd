@@ -1,3 +1,8 @@
+//! DHD Simulator
+//!
+//! A Terminal User Interface (TUI) application simulating the mechanical plant
+//! and PID controller of the Dial Hifi Device.
+
 use common::pid::{PidController, PidHardware};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},

@@ -1,4 +1,4 @@
-use common::pid::{PidController, PidHardware};
+use common::pid::PidController;
 
 use crate::fader::interface::FaderInterface;
 
@@ -74,6 +74,14 @@ impl CalibrationService {
         Self { fader: Some(fader) }
     }
 
+    pub fn take_fader(&mut self) -> FaderInterface {
+        self.fader.take().expect("Fader already taken")
+    }
+
+    pub fn return_fader(&mut self, fader: FaderInterface) {
+        self.fader = Some(fader);
+    }
+
     /// Explores the physical boundaries and stiction of the fader.
     pub async fn run_physical_calibration(&mut self) -> PhysicalCalibration {
         log::info!("Physical calibration starting...");
@@ -102,11 +110,6 @@ impl CalibrationService {
         log::info!("Starting PID autotune...");
         let mut pid = PidController::<_, 50>::new(fader_owned, 0.0, 0.0, 0.0, 0.0);
         pid.calibrate().await;
-
-        log::info!("PID calibration finished. Centering...");
-        pid.run_until_target(0.5).await;
-        log::info!("Centering done, relaxing motor.");
-        pid.hardware.write_output(0.0).await;
 
         let res = PidCalibration {
             kp: pid.kp,

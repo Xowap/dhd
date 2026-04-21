@@ -1,17 +1,9 @@
+pub use common::SystemMode;
 use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 
 pub mod logger;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-pub enum SystemMode {
-    Init = 0,
-    Calibration = 1,
-    Standby = 2,
-    Failsafe = 3,
-}
 
 /// State and signals for device-level coordination.
 pub struct SystemState {
@@ -20,6 +12,8 @@ pub struct SystemState {
     pub sig_start_calib: Signal<CriticalSectionRawMutex, ()>,
     /// Fired when the initial handshake with the host is completed.
     pub sig_handshake_done: Signal<CriticalSectionRawMutex, ()>,
+    /// Fired when the system mode has changed.
+    pub sig_mode_changed: Signal<CriticalSectionRawMutex, ()>,
 }
 
 impl SystemState {
@@ -28,11 +22,13 @@ impl SystemState {
             mode: AtomicU32::new(SystemMode::Init as u32),
             sig_start_calib: Signal::new(),
             sig_handshake_done: Signal::new(),
+            sig_mode_changed: Signal::new(),
         }
     }
 
     pub fn set_mode(&self, mode: SystemMode) {
         self.mode.store(mode as u32, Ordering::Relaxed);
+        self.sig_mode_changed.signal(());
     }
 
     pub fn get_mode(&self) -> SystemMode {
@@ -40,6 +36,8 @@ impl SystemState {
             1 => SystemMode::Calibration,
             2 => SystemMode::Standby,
             3 => SystemMode::Failsafe,
+            4 => SystemMode::PhysicallyDriven,
+            5 => SystemMode::LogicallyDriven,
             _ => SystemMode::Init,
         }
     }

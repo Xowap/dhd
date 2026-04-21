@@ -14,6 +14,7 @@ use crate::fader::calibration::CalibrationResult;
 pub struct FaderState {
     pub last_raw_adc: AtomicU32,
     pub volume_ppm: AtomicU32,
+    pub target_volume_ppm: AtomicU32,
     pub calibration: Mutex<CriticalSectionRawMutex, CalibrationResult>,
 
     /// Fired when a new ADC sample is ready.
@@ -22,6 +23,8 @@ pub struct FaderState {
     pub sig_stable_raw_changed: Signal<CriticalSectionRawMutex, u16>,
     /// Fired when the normalized volume has been recalculated.
     pub sig_vol_changed: Signal<CriticalSectionRawMutex, ()>,
+    /// Fired when the target volume has been updated from the host.
+    pub sig_target_vol_changed: Signal<CriticalSectionRawMutex, ()>,
     /// Fired when calibration boundaries have changed.
     pub sig_range_updated: Signal<CriticalSectionRawMutex, ()>,
 }
@@ -31,6 +34,7 @@ impl FaderState {
         Self {
             last_raw_adc: AtomicU32::new(0),
             volume_ppm: AtomicU32::new(0),
+            target_volume_ppm: AtomicU32::new(0),
             calibration: Mutex::new(CalibrationResult {
                 physical: calibration::PhysicalCalibration {
                     boundaries: calibration::Boundaries {
@@ -51,6 +55,7 @@ impl FaderState {
             sig_raw_changed: Signal::new(),
             sig_stable_raw_changed: Signal::new(),
             sig_vol_changed: Signal::new(),
+            sig_target_vol_changed: Signal::new(),
             sig_range_updated: Signal::new(),
         }
     }

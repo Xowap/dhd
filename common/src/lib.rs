@@ -6,9 +6,28 @@
 
 #![no_std]
 
+/// Module containing the PID controller implementation.
 pub mod pid;
 
 use serde::{Deserialize, Serialize};
+
+/// Current operation mode of the system.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum SystemMode {
+    /// Initializing system state
+    Init = 0,
+    /// Calibrating physical and PID boundaries
+    Calibration = 1,
+    /// Waiting for host or user interaction
+    Standby = 2,
+    /// Critical failure mode
+    Failsafe = 3,
+    /// Knob is being physically pushed by the user
+    PhysicallyDriven = 4,
+    /// Knob is being logically driven by the host
+    LogicallyDriven = 5,
+}
 
 /// Messages sent from the device to the host.
 #[allow(clippy::large_enum_variant)]
@@ -19,6 +38,12 @@ pub enum OutgoingMessage {
     Volume {
         /// Normalized volume value (0.0 to 1.0).
         value: f32,
+    },
+    /// Reports a change in the system mode.
+    #[serde(rename = "mode")]
+    Mode {
+        /// The new system mode.
+        mode: SystemMode,
     },
     /// Sends a diagnostic log message to the host.
     #[serde(rename = "log")]
@@ -67,5 +92,14 @@ pub enum IncomingMessage {
     },
     /// Triggers the device's auto-calibration routine.
     #[serde(rename = "start_calibration")]
-    StartCalibration,
+    StartCalibration {
+        /// Initial volume to set after calibration.
+        volume: f32,
+    },
+    /// Sets the volume of the device from the host.
+    #[serde(rename = "set_volume")]
+    SetVolume {
+        /// Normalized volume value (0.0 to 1.0).
+        value: f32,
+    },
 }

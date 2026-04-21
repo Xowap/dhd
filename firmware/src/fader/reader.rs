@@ -3,6 +3,16 @@ use core::sync::atomic::Ordering;
 use embassy_rp::adc::{Adc, Async, Channel};
 use embassy_time::{Duration, Ticker};
 
+/// Background task responsible for sampling the raw ADC at a high frequency.
+///
+/// This task operates at 500Hz (2ms interval) to read the physical potentiometer.
+/// It immediately broadcasts the raw ADC value (`sig_raw_changed`) for components 
+/// requiring zero latency (like calibration boundary detection). 
+/// 
+/// Simultaneously, it maintains a running Median Filter to scrub out analog noise 
+/// and electrical transients. A hysteresis threshold is applied to this filtered output;
+/// only meaningful, stable changes cause a `sig_stable_raw_changed` event. This effectively
+/// provides the rest of the firmware with a clean, jitter-free view of the fader's position.
 #[embassy_executor::task]
 pub async fn reader_task(
     mut adc: Adc<'static, Async>,

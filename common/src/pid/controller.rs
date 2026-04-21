@@ -46,7 +46,7 @@ pub struct PidController<H: PidHardware, const N: usize> {
     pub deadband_frac: f32,
 
     /// Hysteresis state: whether the motor was driven on the previous step.
-    pub(super) was_driving: bool,
+    pub was_driving: bool,
 }
 
 impl<H: PidHardware, const N: usize> PidController<H, N> {
@@ -237,7 +237,7 @@ impl<H: PidHardware, const N: usize> PidController<H, N> {
         self.reset_history();
 
         // Calculate the number of samples required for the EMA filter to fully settle
-        // (5 time constants gives > 99% settling). This dynamically adjusts the wait 
+        // (5 time constants gives > 99% settling). This dynamically adjusts the wait
         // time based on the calibrated system bandwidth, ensuring we only return when
         // the mechanical plant has verifiably come to a complete physical halt.
         let settle_samples = (5.0 / self.alpha) as u32 + 1;

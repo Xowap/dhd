@@ -2,11 +2,19 @@ use crate::comms::CommsBus;
 use crate::fader::FaderState;
 use crate::system::SystemState;
 use common::{IncomingMessage, OutgoingMessage};
+use core::sync::atomic::Ordering;
 use embassy_rp::peripherals::USB;
 use embassy_rp::usb::Driver;
 use embassy_usb::Builder;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, Receiver, Sender};
 
+/// Background task managing all USB CDC-ACM communication.
+///
+/// This task isolates the USB device drivers, serialization/deserialization, and
+/// buffer management from the core logic. It runs the USB polling future, the RX
+/// listener, and the TX sender concurrently. By operating asynchronously, it ensures
+/// that heavy protocol processing or dropped connections do not pause the critical
+/// PID control loops running in the orchestrator.
 #[embassy_executor::task]
 pub async fn task(
     builder: Builder<'static, Driver<'static, USB>>,
@@ -142,7 +150,10 @@ fn handle_incoming_packet(
                 .try_send(OutgoingMessage::Handshake { message: res });
             system.sig_handshake_done.signal(());
         }
-        Ok((IncomingMessage::StartCalibration, _)) => {
+        Ok((IncomingMessage::StartCalibration { volume }, _)) => {
+            fader
+                .target_volume_ppm
+                .store((volume * 1_000_000.0) as u32, Ordering::Relaxed);
             system.sig_start_calib.signal(());
         }
         Ok((IncomingMessage::UpdateCalibration { bottom, top }, _)) => {
@@ -151,6 +162,12 @@ fn handle_incoming_packet(
                 cal.physical.boundaries.max = top;
             }
             fader.sig_range_updated.signal(());
+        }
+        Ok((IncomingMessage::SetVolume { value }, _)) => {
+            fader
+                .target_volume_ppm
+                .store((value * 1_000_000.0) as u32, Ordering::Relaxed);
+            fader.sig_target_vol_changed.signal(());
         }
         _ => {}
     }

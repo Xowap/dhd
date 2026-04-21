@@ -51,6 +51,7 @@ struct PulseController {
     mainloop: Mainloop,
     context: Context,
     cache: Arc<Mutex<PulseCache>>,
+    vol_tx: mpsc::UnboundedSender<f32>,
 }
 
 // PulseController is safe to share across threads because we use the
@@ -65,7 +66,18 @@ fn log(_tag: &str, color: ColoredString, message: impl AsRef<str>) {
 }
 
 impl PulseController {
-    fn new() -> Result<(Self, mpsc::UnboundedReceiver<PulseEvent>)> {
+    /// Creates a new `PulseController` instance, establishing a connection to 
+    /// the PulseAudio server.
+    ///
+    /// It spins up a threaded mainloop and subscribes to server and sink events 
+    /// to track changes to the default audio output device. It also returns two 
+    /// receiver channels: one for raw PulseAudio events, and one specifically 
+    /// for external volume changes.
+    fn new() -> Result<(
+        Self,
+        mpsc::UnboundedReceiver<PulseEvent>,
+        mpsc::UnboundedReceiver<f32>,
+    )> {
         let mut mainloop = Mainloop::new()
             .ok_or_else(|| anyhow::anyhow!("Failed to create PulseAudio mainloop"))?;
 
@@ -97,6 +109,7 @@ impl PulseController {
 
         let cache = Arc::new(Mutex::new(PulseCache::default()));
         let (tx, rx) = mpsc::unbounded_channel();
+        let (vol_tx, vol_rx) = mpsc::unbounded_channel();
 
         mainloop.lock();
         context.set_subscribe_callback(Some(Box::new(move |facility, _op, index| {
@@ -129,8 +142,10 @@ impl PulseController {
                 mainloop,
                 context,
                 cache,
+                vol_tx,
             },
             rx,
+            vol_rx,
         ))
     }
 
@@ -162,6 +177,9 @@ impl PulseController {
         }
     }
 
+    /// Dispatches a raw PulseAudio event, updating the internal cache if the 
+    /// default sink changes or if its volume is modified externally. Emits the 
+    /// new volume to the `vol_tx` channel if changed.
     pub fn handle_event(&mut self, event: PulseEvent) {
         self.mainloop.lock();
         match event {
@@ -183,6 +201,7 @@ impl PulseController {
 
                 if Some(index) == target_index {
                     let cache_inner = Arc::clone(&self.cache);
+                    let vol_tx = self.vol_tx.clone();
                     self.context
                         .introspect()
                         .get_sink_info_by_index(index, move |res| {
@@ -193,6 +212,7 @@ impl PulseController {
                             {
                                 let avg_vol = info.volume.avg().0 as f32 / Volume::NORMAL.0 as f32;
                                 c.last_volume = info.volume;
+                                let _ = vol_tx.send(avg_vol);
                                 log(
                                     "PULSE",
                                     "PULSE".green(),
@@ -206,6 +226,8 @@ impl PulseController {
         self.mainloop.unlock();
     }
 
+    /// Updates the system volume for the default sink to the specified 
+    /// normalized value (0.0 to 1.0).
     fn set_volume(&mut self, value: f32) {
         let vol = Volume((Volume::NORMAL.0 as f32 * value) as u32);
 
@@ -231,21 +253,31 @@ impl PulseController {
 
         self.mainloop.unlock();
     }
+
+    /// Retrieves the current normalized volume (0.0 to 1.0) of the default 
+    /// sink from the cache.
+    fn get_volume(&self) -> f32 {
+        let last_vol = {
+            let c = self.cache.lock().unwrap();
+            c.last_volume
+        };
+        last_vol.avg().0 as f32 / Volume::NORMAL.0 as f32
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("{}", "=== DHD Host Starting ===".bold().cyan());
 
-    let (pulse, pulse_rx) = match PulseController::new() {
-        Ok((p, rx)) => (Some(Arc::new(Mutex::new(p))), Some(rx)),
+    let (pulse, pulse_rx, mut vol_rx) = match PulseController::new() {
+        Ok((p, rx, vrx)) => (Some(Arc::new(Mutex::new(p))), Some(rx), Some(vrx)),
         Err(e) => {
             eprintln!(
                 "{} {}",
                 "Warning: PulseAudio connection failed:".yellow(),
                 e
             );
-            (None, None)
+            (None, None, None)
         }
     };
 
@@ -264,7 +296,7 @@ async fn main() -> Result<()> {
             Ok(stream) => {
                 log("DEVICE", "DEVICE".green(), "Connected to DHD device!");
                 let framed = Framed::new(stream, LinesCodec::new());
-                if let Err(e) = run_host(framed, pulse.clone()).await {
+                if let Err(e) = run_host(framed, pulse.clone(), &mut vol_rx).await {
                     log("DEVICE", "DEVICE".red(), format!("Connection lost: {}", e));
                 }
             }
@@ -296,6 +328,7 @@ fn find_and_connect() -> Result<SerialStream> {
 async fn run_host(
     mut framed: Framed<SerialStream, LinesCodec>,
     pulse: Option<Arc<Mutex<PulseController>>>,
+    vol_rx: &mut Option<mpsc::UnboundedReceiver<f32>>,
 ) -> Result<()> {
     // Initial handshake
     let handshake = IncomingMessage::Handshake {
@@ -303,6 +336,21 @@ async fn run_host(
     };
     let j = serde_json::to_string(&handshake)?;
     framed.send(j).await?;
+
+    // Send initial volume to the device immediately after handshake
+    if let Some(p) = pulse.clone() {
+        let vol = if let Ok(p_guard) = p.lock() {
+            Some(p_guard.get_volume())
+        } else {
+            None
+        };
+
+        if let Some(v) = vol {
+            let set_vol = IncomingMessage::StartCalibration { volume: v };
+            let j = serde_json::to_string(&set_vol)?;
+            framed.send(j).await?;
+        }
+    }
 
     loop {
         match tokio::time::timeout(Duration::from_secs(2), framed.next()).await {
@@ -316,7 +364,9 @@ async fn run_host(
                         log("DEVICE", "DEVICE".green(), "Handshake successful!");
                         break;
                     }
-                    OutgoingMessage::Log { .. } | OutgoingMessage::Volume { .. } => {
+                    OutgoingMessage::Log { .. }
+                    | OutgoingMessage::Volume { .. }
+                    | OutgoingMessage::Mode { .. } => {
                         handle_message(msg, pulse.as_ref());
                     }
                     OutgoingMessage::Pong { .. } => {
@@ -350,6 +400,18 @@ async fn run_host(
                 let j = serde_json::to_string(&ping)?;
                 framed.send(j).await?;
                 missed_pings += 1;
+            }
+            Some(vol) = async {
+                if let Some(rx) = vol_rx.as_mut() {
+                    rx.recv().await
+                } else {
+                    futures::future::pending().await
+                }
+            } => {
+                let set_vol = IncomingMessage::SetVolume { value: vol };
+                if let Ok(j) = serde_json::to_string(&set_vol) {
+                    let _ = framed.send(j).await;
+                }
             }
             line = framed.next() => {
                 let line = match line {
@@ -412,6 +474,9 @@ fn handle_message(msg: OutgoingMessage, pulse: Option<&Arc<Mutex<PulseController
                 _ => level.as_str().normal(),
             };
             log("LOG", "LOG".white(), format!("[{}] {}", lvl, message));
+        }
+        OutgoingMessage::Mode { mode } => {
+            log("MODE", "MODE".magenta(), format!("{:?}", mode));
         }
         OutgoingMessage::Pong { .. } => {}
         OutgoingMessage::Handshake { message } => {
