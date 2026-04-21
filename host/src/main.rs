@@ -11,6 +11,7 @@ use anyhow::{Context as _, Result};
 use chrono::Local;
 use colored::*;
 use common::{IncomingMessage, OutgoingMessage, SystemMode};
+use fs2::FileExt;
 use futures::{SinkExt, StreamExt};
 use ksni::TrayMethods;
 use libpulse_binding as pulse;
@@ -18,7 +19,7 @@ use pulse::context::subscribe::Facility;
 use pulse::context::{Context, State};
 use pulse::mainloop::threaded::Mainloop;
 use pulse::volume::{ChannelVolumes, Volume};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::interval;
@@ -31,7 +32,6 @@ const VID: u16 = 0x2e8a;
 const PID: u16 = 0x000a;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
@@ -55,7 +55,7 @@ struct Cli {
 enum Commands {
     /// Run the DHD host (default)
     Run,
-    /// Install the DHD host to autostart
+    /// Install the DHD host to autostart and system menu
     Install,
 }
 
@@ -95,9 +95,6 @@ struct PulseCache {
 }
 
 /// PulseAudio controller for system volume adjustment.
-///
-/// Uses a threaded mainloop to handle PulseAudio events and callbacks
-/// asynchronously from the main Tokio loop.
 struct PulseController {
     mainloop: Mainloop,
     context: Context,
@@ -106,8 +103,8 @@ struct PulseController {
 }
 
 struct DhdTray {
-    connected: Arc<AtomicBool>,
-    mode: Arc<AtomicU32>,
+    connected: bool,
+    mode: SystemMode,
     sig_tx: mpsc::UnboundedSender<()>,
 }
 
@@ -116,43 +113,42 @@ impl ksni::Tray for DhdTray {
         "dhd-host".into()
     }
 
-    fn icon_theme_path(&self) -> String {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let installed_path = PathBuf::from(home).join(".local/share/dhd/assets");
-        if installed_path.exists() {
-            installed_path.to_string_lossy().into_owned()
-        } else {
-            "/home/remy/dev/dhd/host/assets".into()
-        }
-    }
-
     fn icon_name(&self) -> String {
-        if self.connected.load(Ordering::SeqCst) {
-            match self.mode.load(Ordering::SeqCst) {
-                m if m == SystemMode::Init as u32 => "dhd-init",
-                m if m == SystemMode::Calibration as u32 => "dhd-calib",
-                m if m == SystemMode::Standby as u32 => "dhd-ready",
-                m if m == SystemMode::Failsafe as u32 => "dhd-error",
-                m if m == SystemMode::PhysicallyDriven as u32 => "dhd-hand",
-                m if m == SystemMode::LogicallyDriven as u32 => "dhd-auto",
-                _ => "dhd-ready",
+        let name = if self.connected {
+            match self.mode {
+                SystemMode::Init => "dhd-init",
+                SystemMode::Calibration => "dhd-calib",
+                SystemMode::Standby => "dhd-ready",
+                SystemMode::Failsafe => "dhd-error",
+                SystemMode::PhysicallyDriven => "dhd-hand",
+                SystemMode::LogicallyDriven => "dhd-auto",
             }
         } else {
             "dhd-offline"
+        };
+
+        let home = std::env::var("HOME").unwrap_or_default();
+        let installed_path = PathBuf::from(home)
+            .join(".local/share/dhd/assets")
+            .join(format!("{}.svg", name));
+
+        if installed_path.exists() {
+            installed_path.to_string_lossy().into_owned()
+        } else {
+            // Fallback for development
+            format!("/home/remy/dev/dhd/host/assets/{}.svg", name)
         }
-        .into()
     }
 
     fn title(&self) -> String {
-        let emoji = if self.connected.load(Ordering::SeqCst) {
-            match self.mode.load(Ordering::SeqCst) {
-                m if m == SystemMode::Init as u32 => "⏳",
-                m if m == SystemMode::Calibration as u32 => "⚖️",
-                m if m == SystemMode::Standby as u32 => "😴",
-                m if m == SystemMode::Failsafe as u32 => "🚨",
-                m if m == SystemMode::PhysicallyDriven as u32 => "🖐️",
-                m if m == SystemMode::LogicallyDriven as u32 => "🤖",
-                _ => "🔊",
+        let emoji = if self.connected {
+            match self.mode {
+                SystemMode::Init => "⏳",
+                SystemMode::Calibration => "⚖️",
+                SystemMode::Standby => "😴",
+                SystemMode::Failsafe => "🚨",
+                SystemMode::PhysicallyDriven => "🖐️",
+                SystemMode::LogicallyDriven => "🤖",
             }
         } else {
             "❌"
@@ -161,15 +157,14 @@ impl ksni::Tray for DhdTray {
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
-        let status = if self.connected.load(Ordering::SeqCst) {
-            match self.mode.load(Ordering::SeqCst) {
-                m if m == SystemMode::Init as u32 => "Initializing...",
-                m if m == SystemMode::Calibration as u32 => "Calibrating...",
-                m if m == SystemMode::Standby as u32 => "Standby",
-                m if m == SystemMode::Failsafe as u32 => "FAILSAFE!",
-                m if m == SystemMode::PhysicallyDriven as u32 => "Physically Driven",
-                m if m == SystemMode::LogicallyDriven as u32 => "Logically Driven",
-                _ => "Connected",
+        let status = if self.connected {
+            match self.mode {
+                SystemMode::Init => "Initializing...",
+                SystemMode::Calibration => "Calibrating...",
+                SystemMode::Standby => "Standby",
+                SystemMode::Failsafe => "FAILSAFE!",
+                SystemMode::PhysicallyDriven => "Physically Driven",
+                SystemMode::LogicallyDriven => "Logically Driven",
             }
         } else {
             "Disconnected"
@@ -186,7 +181,7 @@ impl ksni::Tray for DhdTray {
         vec![
             StandardItem {
                 label: "Force Calibration".into(),
-                enabled: self.connected.load(Ordering::SeqCst),
+                enabled: self.connected,
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.sig_tx.send(());
                 }),
@@ -206,25 +201,15 @@ impl ksni::Tray for DhdTray {
     }
 }
 
-// PulseController is safe to share across threads because we use the
-// ThreadedMainloop's locking mechanism to synchronize access to the context.
 unsafe impl Send for PulseController {}
 unsafe impl Sync for PulseController {}
 
-/// Formats and prints a log message with a timestamp.
 fn log(_tag: &str, color: ColoredString, message: impl AsRef<str>) {
     let now = Local::now().format("%H:%M:%S%.3f").to_string().dimmed();
     println!("{} [{}] {}", now, color.bold(), message.as_ref());
 }
 
 impl PulseController {
-    /// Creates a new `PulseController` instance, establishing a connection to
-    /// the PulseAudio server.
-    ///
-    /// It spins up a threaded mainloop and subscribes to server and sink events
-    /// to track changes to the default audio output device. It also returns two
-    /// receiver channels: one for raw PulseAudio events, and one specifically
-    /// for external volume changes.
     fn new() -> Result<(
         Self,
         mpsc::UnboundedReceiver<PulseEvent>,
@@ -232,24 +217,18 @@ impl PulseController {
     )> {
         let mut mainloop = Mainloop::new()
             .ok_or_else(|| anyhow::anyhow!("Failed to create PulseAudio mainloop"))?;
-
         let mut context = Context::new(&mainloop, "DHD Host")
             .ok_or_else(|| anyhow::anyhow!("Failed to create PulseAudio context"))?;
-
         context
             .connect(None, pulse::context::FlagSet::NOFLAGS, None)
             .map_err(|e| anyhow::anyhow!("Failed to connect PulseAudio context: {:?}", e))?;
-
         mainloop
             .start()
             .map_err(|e| anyhow::anyhow!("Failed to start PulseAudio mainloop: {:?}", e))?;
-
-        // Wait for context to be ready
         loop {
             mainloop.lock();
             let state = context.get_state();
             mainloop.unlock();
-
             match state {
                 State::Ready => break,
                 State::Failed | State::Terminated => {
@@ -258,11 +237,9 @@ impl PulseController {
                 _ => std::thread::sleep(Duration::from_millis(10)),
             }
         }
-
         let cache = Arc::new(Mutex::new(PulseCache::default()));
         let (tx, rx) = mpsc::unbounded_channel();
         let (vol_tx, vol_rx) = mpsc::unbounded_channel();
-
         mainloop.lock();
         context.set_subscribe_callback(Some(Box::new(move |facility, _op, index| {
             if let Some(Facility::Server) = facility {
@@ -271,13 +248,11 @@ impl PulseController {
                 let _ = tx.send(PulseEvent::SinkChange(index));
             }
         })));
-
         context.subscribe(
             pulse::context::subscribe::InterestMaskSet::SERVER
                 | pulse::context::subscribe::InterestMaskSet::SINK,
             |_| {},
         );
-
         let cache_initial = Arc::clone(&cache);
         context
             .introspect()
@@ -286,9 +261,7 @@ impl PulseController {
                     Self::update_cache_and_log(&cache_initial, info, "Default sink");
                 }
             });
-
         mainloop.unlock();
-
         Ok((
             Self {
                 mainloop,
@@ -309,7 +282,6 @@ impl PulseController {
         let name = info.name.as_deref().unwrap_or("unknown");
         let desc = info.description.as_deref().unwrap_or("no description");
         let current_vol = info.volume.avg().0 as f32 / Volume::NORMAL.0 as f32;
-
         log(
             "PULSE",
             "PULSE".magenta(),
@@ -321,7 +293,6 @@ impl PulseController {
                 current_vol
             ),
         );
-
         if let Ok(mut c) = cache.lock() {
             c.sink_index = Some(info.index);
             c.num_channels = info.volume.get().len() as u8;
@@ -329,9 +300,6 @@ impl PulseController {
         }
     }
 
-    /// Dispatches a raw PulseAudio event, updating the internal cache if the
-    /// default sink changes or if its volume is modified externally. Emits the
-    /// new volume to the `vol_tx` channel if changed.
     pub fn handle_event(&mut self, event: PulseEvent) {
         self.mainloop.lock();
         match event {
@@ -350,7 +318,6 @@ impl PulseController {
                     let c = self.cache.lock().unwrap();
                     (c.sink_index, c.last_volume)
                 };
-
                 if Some(index) == target_index {
                     let cache_inner = Arc::clone(&self.cache);
                     let vol_tx = self.vol_tx.clone();
@@ -378,36 +345,26 @@ impl PulseController {
         self.mainloop.unlock();
     }
 
-    /// Updates the system volume for the default sink to the specified
-    /// normalized value (0.0 to 1.0).
     fn set_volume(&mut self, value: f32) {
         let vol = Volume((Volume::NORMAL.0 as f32 * value) as u32);
-
         self.mainloop.lock();
-
         let (index, n_channels) = {
             let c = self.cache.lock().unwrap();
             (c.sink_index, c.num_channels)
         };
-
         if let Some(idx) = index {
             let mut cv = ChannelVolumes::default();
             cv.set(n_channels, vol);
-
             if let Ok(mut c) = self.cache.lock() {
                 c.last_volume = cv;
             }
-
             self.context
                 .introspect()
                 .set_sink_volume_by_index(idx, &cv, None);
         }
-
         self.mainloop.unlock();
     }
 
-    /// Retrieves the current normalized volume (0.0 to 1.0) of the default
-    /// sink from the cache.
     fn get_volume(&self) -> f32 {
         let last_vol = {
             let c = self.cache.lock().unwrap();
@@ -419,28 +376,58 @@ impl PulseController {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-
-    match cli.command {
-        Some(Commands::Install) => install(),
-        _ => {
-            if cli.systray {
-                let stdout = std::fs::File::create("/tmp/dhd-host.out")?;
-                let stderr = std::fs::File::create("/tmp/dhd-host.err")?;
-
-                let daemonize = daemonize::Daemonize::new().stdout(stdout).stderr(stderr);
-
-                match daemonize.start() {
-                    Ok(_) => println!("Success, daemonized"),
-                    Err(e) => eprintln!("Error, {}", e),
-                }
-            }
-
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?
-                .block_on(run(cli))
+    if let Some(Commands::Install) = cli.command {
+        return install();
+    }
+    let home = std::env::var("HOME").context("Failed to get HOME")?;
+    let lock_path = PathBuf::from(home).join(".cache/dhd.lock");
+    std::fs::create_dir_all(lock_path.parent().unwrap())?;
+    {
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)?;
+        if f.try_lock_exclusive().is_err() {
+            eprintln!(
+                "\n{} {}\n",
+                "⚠️".yellow(),
+                "Another instance of DHD is already running. Aborting."
+                    .bold()
+                    .red()
+            );
+            std::process::exit(1);
         }
     }
+    if cli.systray {
+        let stdout = std::fs::File::create("/tmp/dhd-host.out")?;
+        let stderr = std::fs::File::create("/tmp/dhd-host.err")?;
+        let daemonize = daemonize::Daemonize::new()
+            .stdout(stdout)
+            .stderr(stderr)
+            .working_directory("/");
+        if let Err(e) = daemonize.start() {
+            eprintln!("{} Error daemonizing: {}", "⚠️".red(), e);
+            std::process::exit(1);
+        }
+    }
+    let lock_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    lock_file
+        .lock_exclusive()
+        .context("Failed to acquire process lock")?;
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async {
+            let _holder = lock_file;
+            run(cli).await
+        })
 }
 
 fn install() -> Result<()> {
@@ -449,53 +436,39 @@ fn install() -> Result<()> {
     let bin_dir = PathBuf::from(&home).join(".local/bin");
     let target_exe = bin_dir.join("dhd");
     let data_dir = PathBuf::from(&home).join(".local/share/dhd/assets");
-
-    println!("\n{}", "🚀 Installing DHD (Dial Hifi Device)...".bold().cyan());
-
-    // Create directories
+    let autostart_dir = PathBuf::from(&home).join(".config/autostart");
+    let apps_dir = PathBuf::from(&home).join(".local/share/applications");
+    let icons_dir = PathBuf::from(&home).join(".local/share/icons/hicolor/scalable/apps");
     std::fs::create_dir_all(&bin_dir)?;
     std::fs::create_dir_all(&data_dir)?;
-
-    // Copy binary
+    std::fs::create_dir_all(&autostart_dir)?;
+    std::fs::create_dir_all(&apps_dir)?;
+    std::fs::create_dir_all(&icons_dir)?;
     std::fs::copy(&current_exe, &target_exe)?;
-    println!(
-        "{} Binary installed to {}",
-        "📦".green(),
-        target_exe.display().to_string().italic().dimmed()
-    );
-
-    // Copy assets
     let assets_src = PathBuf::from("/home/remy/dev/dhd/host/assets");
+    let mut asset_count = 0;
     if assets_src.exists() {
-        let mut count = 0;
         for entry in std::fs::read_dir(assets_src)? {
             let entry = entry?;
             let path = entry.path();
             if path.is_file() {
                 let dest = data_dir.join(path.file_name().unwrap());
                 std::fs::copy(&path, &dest)?;
-                count += 1;
+                asset_count += 1;
             }
         }
-        println!(
-            "{} {} assets installed to {}",
-            "🎨".magenta(),
-            count,
-            data_dir.display().to_string().italic().dimmed()
-        );
     }
-
-    // Setup autostart
-    let autostart_dir = PathBuf::from(&home).join(".config/autostart");
-    std::fs::create_dir_all(&autostart_dir)?;
-
-    let desktop_file = autostart_dir.join("dhd.desktop");
+    let icon_file = icons_dir.join("dhd.svg");
+    let main_icon_src = PathBuf::from("/home/remy/dev/dhd/host/assets/dhd-ready.svg");
+    if main_icon_src.exists() {
+        std::fs::copy(&main_icon_src, &icon_file)?;
+    }
     let desktop_content = format!(
         r#"[Desktop Entry]
 Type=Application
 Name=DHD Host
 Exec={} --systray
-Icon=audio-ready
+Icon=dhd
 Comment=Dial Hifi Device Host
 Terminal=false
 Categories=Settings;HardwareSettings;
@@ -503,41 +476,53 @@ X-GNOME-Autostart-enabled=true
 "#,
         target_exe.display()
     );
-
-    std::fs::write(&desktop_file, desktop_content)?;
+    std::fs::write(autostart_dir.join("dhd.desktop"), &desktop_content)?;
+    std::fs::write(apps_dir.join("dhd.desktop"), &desktop_content)?;
+    let pipe = "│".truecolor(100, 100, 100);
+    let branch = "├──".truecolor(100, 100, 100);
+    let last = "└──".truecolor(100, 100, 100);
+    println!("\n{}", "🚀 DHD Installation Complete!".bold().cyan());
+    println!("{}", "~/.local/".blue().bold());
+    println!("{} {}", branch, "bin/".blue().bold());
+    println!("{}   {} {}", pipe, last, "dhd".green().bold());
+    println!("{} {}", branch, "share/".blue().bold());
+    println!("{}   {} {}", pipe, branch, "dhd/".blue().bold());
     println!(
-        "{} Autostart configured at {}",
-        "🔧".blue(),
-        desktop_file.display().to_string().italic().dimmed()
+        "{}   {}   {} {} {}",
+        pipe,
+        pipe,
+        last,
+        "assets/".blue().bold(),
+        format!("({} files)", asset_count).yellow()
     );
-
+    println!("{}   {} {}", pipe, branch, "applications/".blue().bold());
+    println!("{}   {}   {} {}", pipe, pipe, last, "dhd.desktop".green());
     println!(
-        "\n{}\n",
-        "✨ Installation complete! DHD will now start automatically on login."
-            .bold()
-            .green()
+        "{}   {} {}",
+        pipe,
+        last,
+        "icons/hicolor/scalable/apps/".blue().bold()
     );
+    println!("{}       {} {}", pipe, last, "dhd.svg".green());
+    println!("{}", ".config/autostart/".blue().bold());
+    println!("{} {}", last, "dhd.desktop".green());
+    println!("\n{}\n", "✨ Ready to roll!".bold().green());
     Ok(())
 }
 
 async fn run(args: Cli) -> Result<()> {
     println!("{}", "=== DHD Host Starting ===".bold().cyan());
-
     let (sig_tx, sig_rx) = mpsc::unbounded_channel();
-    let connected = Arc::new(AtomicBool::new(false));
-    let mode = Arc::new(AtomicU32::new(SystemMode::Init as u32));
-
     let tray_handle = if args.systray {
         let tray = DhdTray {
-            connected: Arc::clone(&connected),
-            mode: Arc::clone(&mode),
+            connected: false,
+            mode: SystemMode::Init,
             sig_tx: sig_tx.clone(),
         };
         Some(tray.spawn().await.expect("Failed to spawn tray"))
     } else {
         None
     };
-
     let (pulse, pulse_rx, mut vol_rx) = match PulseController::new() {
         Ok((p, rx, vrx)) => (Some(Arc::new(Mutex::new(p))), Some(rx), Some(vrx)),
         Err(e) => {
@@ -549,7 +534,6 @@ async fn run(args: Cli) -> Result<()> {
             (None, None, None)
         }
     };
-
     if let (Some(p), Some(mut rx)) = (pulse.clone(), pulse_rx) {
         tokio::spawn(async move {
             while let Some(event) = rx.recv().await {
@@ -559,7 +543,6 @@ async fn run(args: Cli) -> Result<()> {
             }
         });
     }
-
     let mut sig_usr1 = signal(SignalKind::user_defined1())?;
     let sig_tx_clone = sig_tx.clone();
     tokio::spawn(async move {
@@ -572,36 +555,37 @@ async fn run(args: Cli) -> Result<()> {
             let _ = sig_tx_clone.send(());
         }
     });
-
-    let mut sig_rx = Some(sig_rx);
-
+    let mut sig_rx_opt = Some(sig_rx);
     loop {
         match find_and_connect() {
             Ok(stream) => {
                 log("DEVICE", "DEVICE".green(), "Connected to DHD device!");
-                connected.store(true, Ordering::SeqCst);
                 if let Some(handle) = tray_handle.as_ref() {
-                    let _ = handle.update(|_| {}).await;
+                    let _ = handle
+                        .update(|tray| {
+                            tray.connected = true;
+                        })
+                        .await;
                 }
-
                 let framed = Framed::new(stream, LinesCodec::new());
                 if let Err(e) = run_host(
                     framed,
                     pulse.clone(),
                     &mut vol_rx,
-                    &mut sig_rx,
+                    &mut sig_rx_opt,
                     &args,
-                    &mode,
                     &tray_handle,
                 )
                 .await
                 {
                     log("DEVICE", "DEVICE".red(), format!("Connection lost: {}", e));
                 }
-
-                connected.store(false, Ordering::SeqCst);
                 if let Some(handle) = tray_handle.as_ref() {
-                    let _ = handle.update(|_| {}).await;
+                    let _ = handle
+                        .update(|tray| {
+                            tray.connected = false;
+                        })
+                        .await;
                 }
             }
             Err(_) => {
@@ -611,7 +595,6 @@ async fn run(args: Cli) -> Result<()> {
     }
 }
 
-/// Scans available USB serial ports for a DHD device and opens it.
 fn find_and_connect() -> Result<SerialStream> {
     let ports = serialport::available_ports().context("Failed to list serial ports")?;
     for p in ports {
@@ -619,51 +602,36 @@ fn find_and_connect() -> Result<SerialStream> {
             && info.vid == VID
             && info.pid == PID
         {
-            let stream = tokio_serial::new(p.port_name, 115_200)
+            return tokio_serial::new(p.port_name, 115_200)
                 .open_native_async()
-                .context("Failed to open serial port")?;
-            return Ok(stream);
+                .context("Failed to open serial port");
         }
     }
     anyhow::bail!("Device not found")
 }
 
-/// Main communication loop for an active connection.
 async fn run_host(
     mut framed: Framed<SerialStream, LinesCodec>,
     pulse: Option<Arc<Mutex<PulseController>>>,
     vol_rx: &mut Option<mpsc::UnboundedReceiver<f32>>,
     sig_rx: &mut Option<mpsc::UnboundedReceiver<()>>,
     args: &Cli,
-    mode: &Arc<AtomicU32>,
     tray_handle: &Option<ksni::Handle<DhdTray>>,
 ) -> Result<()> {
-    // Initial handshake
     let handshake = IncomingMessage::Handshake {
         message: "Tek'ma'te Teal'c".parse().unwrap(),
     };
-    let j = serde_json::to_string(&handshake)?;
-    framed.send(j).await?;
-
-    // Send initial volume to the device immediately after handshake
-    // This also acts as a "soft calibration" request.
+    framed.send(serde_json::to_string(&handshake)?).await?;
     if let Some(p) = pulse.clone() {
-        let vol = if let Ok(p_guard) = p.lock() {
-            Some(p_guard.get_volume())
-        } else {
-            None
-        };
-
+        let vol = p.lock().ok().map(|p_guard| p_guard.get_volume());
         if let Some(v) = vol {
             let set_vol = IncomingMessage::StartCalibration {
                 volume: v,
                 force: false,
             };
-            let j = serde_json::to_string(&set_vol)?;
-            framed.send(j).await?;
+            framed.send(serde_json::to_string(&set_vol)?).await?;
         }
     }
-
     loop {
         match tokio::time::timeout(Duration::from_secs(2), framed.next()).await {
             Ok(Some(Ok(line))) => {
@@ -676,132 +644,59 @@ async fn run_host(
                         log("DEVICE", "DEVICE".green(), "Handshake successful!");
                         break;
                     }
-                    OutgoingMessage::Log { .. }
-                    | OutgoingMessage::Volume { .. }
-                    | OutgoingMessage::Mode { .. } => {
-                        handle_message(msg, pulse.as_ref(), args, mode, tray_handle);
-                    }
-                    OutgoingMessage::Pong { .. } => {
-                        // Ignore pongs during handshake phase
-                    }
+                    _ => handle_message(msg, pulse.as_ref(), args, tray_handle).await,
                 }
             }
-            Ok(None) | Ok(Some(Err(_))) | Err(_) => {
-                return Err(anyhow::anyhow!("Handshake timeout or error"));
-            }
+            _ => return Err(anyhow::anyhow!("Handshake timeout or error")),
         }
     }
-
     let mut ping_interval = interval(Duration::from_secs(1));
     let mut ping_timestamp: u64 = 0;
     let mut missed_pings = 0;
-
     loop {
         tokio::select! {
             _ = ping_interval.tick() => {
-                if missed_pings >= 3 {
-                    return Err(anyhow::anyhow!("Connection dead: 3 pings missed"));
-                }
-
-                ping_timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)?
-                    .as_millis() as u64;
-                let ping = IncomingMessage::Ping {
-                    timestamp: ping_timestamp,
-                };
-                let j = serde_json::to_string(&ping)?;
-                framed.send(j).await?;
+                if missed_pings >= 3 { return Err(anyhow::anyhow!("Connection dead")); }
+                ping_timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64;
+                framed.send(serde_json::to_string(&IncomingMessage::Ping { timestamp: ping_timestamp })?).await?;
                 missed_pings += 1;
             }
-            Some(vol) = async {
-                if let Some(rx) = vol_rx.as_mut() {
-                    rx.recv().await
-                } else {
-                    futures::future::pending().await
-                }
-            } => {
-                let set_vol = IncomingMessage::SetVolume { value: vol };
-                if let Ok(j) = serde_json::to_string(&set_vol) {
-                    let _ = framed.send(j).await;
-                }
+            Some(vol) = async { if let Some(rx) = vol_rx.as_mut() { rx.recv().await } else { futures::future::pending().await } } => {
+                framed.send(serde_json::to_string(&IncomingMessage::SetVolume { value: vol })?).await?;
             }
-            Some(_) = async {
-                if let Some(rx) = sig_rx.as_mut() {
-                    rx.recv().await
-                } else {
-                    futures::future::pending().await
-                }
-            } => {
-                let vol = if let Some(p) = pulse.as_ref() {
-                    if let Ok(p_guard) = p.lock() {
-                        p_guard.get_volume()
-                    } else {
-                        0.5
-                    }
-                } else {
-                    0.5
-                };
-                let set_vol = IncomingMessage::StartCalibration {
-                    volume: vol,
-                    force: true,
-                };
-                if let Ok(j) = serde_json::to_string(&set_vol) {
-                    let _ = framed.send(j).await;
-                }
+            Some(_) = async { if let Some(rx) = sig_rx.as_mut() { rx.recv().await } else { futures::future::pending().await } } => {
+                let vol = pulse.as_ref().and_then(|p| p.lock().ok()).map(|p| p.get_volume()).unwrap_or(0.5);
+                framed.send(serde_json::to_string(&IncomingMessage::StartCalibration { volume: vol, force: true })?).await?;
             }
             line = framed.next() => {
-                let line = match line {
-                    Some(Ok(l)) => l,
-                    Some(Err(e)) => return Err(e.into()),
-                    None => return Err(anyhow::anyhow!("EOF reached")),
-                };
-
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-
-                match serde_json::from_str::<OutgoingMessage>(line) {
-                    Ok(msg) => {
-                        if let OutgoingMessage::Pong { timestamp } = msg {
-                            if timestamp == ping_timestamp {
-                                missed_pings = 0;
-                            }
-                        } else {
-                            handle_message(msg, pulse.as_ref(), args, mode, tray_handle);
-                        }
-                    }
-                    Err(e) => {
-                        if line.contains('{') {
-                            eprintln!(
-                                "{} {} (line: {})",
-                                "Failed to parse JSON:".yellow(),
-                                e,
-                                line
-                            );
-                        }
-                    }
+                let line = match line { Some(Ok(l)) => l, Some(Err(e)) => return Err(e.into()), None => return Err(anyhow::anyhow!("EOF")), };
+                if let Ok(msg) = serde_json::from_str::<OutgoingMessage>(line.trim()) {
+                    if let OutgoingMessage::Pong { timestamp } = msg { if timestamp == ping_timestamp { missed_pings = 0; } }
+                    else { handle_message(msg, pulse.as_ref(), args, tray_handle).await; }
                 }
             }
         }
     }
 }
 
-/// Dispatches an incoming `OutgoingMessage` to the appropriate display logic.
-fn handle_message(
+async fn handle_message(
     msg: OutgoingMessage,
     pulse: Option<&Arc<Mutex<PulseController>>>,
     args: &Cli,
-    mode: &Arc<AtomicU32>,
     tray_handle: &Option<ksni::Handle<DhdTray>>,
 ) {
     match msg {
         OutgoingMessage::Volume { value } => {
             let bar_len = (value * 20.0).clamp(0.0, 20.0) as usize;
-            let bar = "|".repeat(bar_len) + &"-".repeat(20 - bar_len);
-            log("VOL", "VOL".blue(), format!("{} {:.3}", bar.blue(), value));
-
-            // Update system volume
+            log(
+                "VOL",
+                "VOL".blue(),
+                format!(
+                    "{} {:.3}",
+                    "|".repeat(bar_len) + &"-".repeat(20 - bar_len),
+                    value
+                ),
+            );
             if let Some(p) = pulse
                 && let Ok(mut p_guard) = p.lock()
             {
@@ -809,38 +704,32 @@ fn handle_message(
             }
         }
         OutgoingMessage::Log { level, message } => {
-            let msg_level = LogLevel::from_str(level.as_str());
-            if msg_level > args.log_level {
-                return;
+            if LogLevel::from_str(level.as_str()) <= args.log_level {
+                let lvl_colored = match level.as_str() {
+                    "INFO" => "INFO".green(),
+                    "WARN" => "WARN".yellow(),
+                    "ERROR" => "ERROR".red(),
+                    "DEBUG" => "DEBUG".blue(),
+                    "TRACE" => "TRACE".magenta(),
+                    _ => level.as_str().normal(),
+                };
+                log(
+                    "LOG",
+                    "LOG".white(),
+                    format!("[{}] {}", lvl_colored, message),
+                );
             }
-
-            let lvl = match level.as_str() {
-                "INFO" => "INFO".green(),
-                "WARN" => "WARN".yellow(),
-                "ERROR" => "ERROR".red(),
-                "DEBUG" => "DEBUG".blue(),
-                "TRACE" => "TRACE".magenta(),
-                _ => level.as_str().normal(),
-            };
-            log("LOG", "LOG".white(), format!("[{}] {}", lvl, message));
         }
         OutgoingMessage::Mode { mode: new_mode } => {
             log("MODE", "MODE".magenta(), format!("{:?}", new_mode));
-            mode.store(new_mode as u32, Ordering::SeqCst);
             if let Some(handle) = tray_handle {
-                let h = handle.clone();
-                tokio::spawn(async move {
-                    let _ = h.update(|_| {}).await;
-                });
+                let _ = handle
+                    .update(|tray| {
+                        tray.mode = new_mode;
+                    })
+                    .await;
             }
         }
-        OutgoingMessage::Pong { .. } => {}
-        OutgoingMessage::Handshake { message } => {
-            log(
-                "HEALTH",
-                "HEALTH".yellow(),
-                format!("Unexpected handshake response: {}", message),
-            );
-        }
+        _ => {}
     }
 }

@@ -13,6 +13,7 @@ chrono = "0.4"
 libpulse-binding = "2.28"
 ksni = "0.3"
 daemonize = "0.5"
+fs2 = "0.4"
 tokio = { version = "1.0", features = ["full"] }
 tokio-serial = "5.4"
 tokio-util = { version = "0.7", features = ["codec"] }
