@@ -10,13 +10,15 @@
 use anyhow::{Context as _, Result};
 use chrono::Local;
 use colored::*;
-use common::{IncomingMessage, OutgoingMessage};
+use common::{IncomingMessage, OutgoingMessage, SystemMode};
 use futures::{SinkExt, StreamExt};
+use ksni::TrayMethods;
 use libpulse_binding as pulse;
 use pulse::context::subscribe::Facility;
 use pulse::context::{Context, State};
 use pulse::mainloop::threaded::Mainloop;
 use pulse::volume::{ChannelVolumes, Volume};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::interval;
@@ -28,9 +30,9 @@ const VID: u16 = 0x2e8a;
 /// Raspberry Pi Pico CDC-ACM Product ID.
 const PID: u16 = 0x000a;
 
+use clap::{Parser, ValueEnum};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
-use clap::{Parser, ValueEnum};
 
 /// DHD (Dial Hifi Device) Host Tool
 #[derive(Parser, Debug)]
@@ -39,6 +41,10 @@ struct Args {
     /// Set the log level for the device
     #[arg(short, long, value_enum, default_value_t = LogLevel::Info, env = "DHD_LOG")]
     log_level: LogLevel,
+
+    /// Enable system tray icon and detach from terminal
+    #[arg(short, long)]
+    systray: bool,
 }
 
 #[derive(ValueEnum, Clone, Debug, PartialEq, PartialOrd)]
@@ -85,6 +91,101 @@ struct PulseController {
     context: Context,
     cache: Arc<Mutex<PulseCache>>,
     vol_tx: mpsc::UnboundedSender<f32>,
+}
+
+struct DhdTray {
+    connected: Arc<AtomicBool>,
+    mode: Arc<AtomicU32>,
+    sig_tx: mpsc::UnboundedSender<()>,
+}
+
+impl ksni::Tray for DhdTray {
+    fn id(&self) -> String {
+        "dhd-host".into()
+    }
+
+    fn icon_theme_path(&self) -> String {
+        "/home/remy/dev/dhd/host/assets".into()
+    }
+
+    fn icon_name(&self) -> String {
+        if self.connected.load(Ordering::SeqCst) {
+            match self.mode.load(Ordering::SeqCst) {
+                m if m == SystemMode::Init as u32 => "dhd-init",
+                m if m == SystemMode::Calibration as u32 => "dhd-calib",
+                m if m == SystemMode::Standby as u32 => "dhd-ready",
+                m if m == SystemMode::Failsafe as u32 => "dhd-error",
+                m if m == SystemMode::PhysicallyDriven as u32 => "dhd-hand",
+                m if m == SystemMode::LogicallyDriven as u32 => "dhd-auto",
+                _ => "dhd-ready",
+            }
+        } else {
+            "dhd-offline"
+        }
+        .into()
+    }
+
+    fn title(&self) -> String {
+        let emoji = if self.connected.load(Ordering::SeqCst) {
+            match self.mode.load(Ordering::SeqCst) {
+                m if m == SystemMode::Init as u32 => "⏳",
+                m if m == SystemMode::Calibration as u32 => "⚖️",
+                m if m == SystemMode::Standby as u32 => "😴",
+                m if m == SystemMode::Failsafe as u32 => "🚨",
+                m if m == SystemMode::PhysicallyDriven as u32 => "🖐️",
+                m if m == SystemMode::LogicallyDriven as u32 => "🤖",
+                _ => "🔊",
+            }
+        } else {
+            "❌"
+        };
+        format!("{} DHD", emoji)
+    }
+
+    fn tool_tip(&self) -> ksni::ToolTip {
+        let status = if self.connected.load(Ordering::SeqCst) {
+            match self.mode.load(Ordering::SeqCst) {
+                m if m == SystemMode::Init as u32 => "Initializing...",
+                m if m == SystemMode::Calibration as u32 => "Calibrating...",
+                m if m == SystemMode::Standby as u32 => "Standby",
+                m if m == SystemMode::Failsafe as u32 => "FAILSAFE!",
+                m if m == SystemMode::PhysicallyDriven as u32 => "Physically Driven",
+                m if m == SystemMode::LogicallyDriven as u32 => "Logically Driven",
+                _ => "Connected",
+            }
+        } else {
+            "Disconnected"
+        };
+        ksni::ToolTip {
+            title: "DHD Host".into(),
+            description: status.into(),
+            ..Default::default()
+        }
+    }
+
+    fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+        use ksni::menu::*;
+        vec![
+            StandardItem {
+                label: "Force Calibration".into(),
+                enabled: self.connected.load(Ordering::SeqCst),
+                activate: Box::new(|this: &mut Self| {
+                    let _ = this.sig_tx.send(());
+                }),
+                ..Default::default()
+            }
+            .into(),
+            MenuItem::Separator,
+            StandardItem {
+                label: "Quit".into(),
+                activate: Box::new(|_| {
+                    std::process::exit(0);
+                }),
+                ..Default::default()
+            }
+            .into(),
+        ]
+    }
 }
 
 // PulseController is safe to share across threads because we use the
@@ -298,10 +399,44 @@ impl PulseController {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.systray {
+        let stdout = std::fs::File::create("/tmp/dhd-host.out")?;
+        let stderr = std::fs::File::create("/tmp/dhd-host.err")?;
+
+        let daemonize = daemonize::Daemonize::new().stdout(stdout).stderr(stderr);
+
+        match daemonize.start() {
+            Ok(_) => println!("Success, daemonized"),
+            Err(e) => eprintln!("Error, {}", e),
+        }
+    }
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(args))
+}
+
+async fn run(args: Args) -> Result<()> {
     println!("{}", "=== DHD Host Starting ===".bold().cyan());
+
+    let (sig_tx, sig_rx) = mpsc::unbounded_channel();
+    let connected = Arc::new(AtomicBool::new(false));
+    let mode = Arc::new(AtomicU32::new(SystemMode::Init as u32));
+
+    let tray_handle = if args.systray {
+        let tray = DhdTray {
+            connected: Arc::clone(&connected),
+            mode: Arc::clone(&mode),
+            sig_tx: sig_tx.clone(),
+        };
+        Some(tray.spawn().await.expect("Failed to spawn tray"))
+    } else {
+        None
+    };
 
     let (pulse, pulse_rx, mut vol_rx) = match PulseController::new() {
         Ok((p, rx, vrx)) => (Some(Arc::new(Mutex::new(p))), Some(rx), Some(vrx)),
@@ -325,8 +460,8 @@ async fn main() -> Result<()> {
         });
     }
 
-    let (sig_tx, sig_rx) = mpsc::unbounded_channel();
     let mut sig_usr1 = signal(SignalKind::user_defined1())?;
+    let sig_tx_clone = sig_tx.clone();
     tokio::spawn(async move {
         while sig_usr1.recv().await.is_some() {
             log(
@@ -334,7 +469,7 @@ async fn main() -> Result<()> {
                 "HOST".yellow(),
                 "Received SIGUSR1 - Triggering hard calibration",
             );
-            let _ = sig_tx.send(());
+            let _ = sig_tx_clone.send(());
         }
     });
 
@@ -344,9 +479,29 @@ async fn main() -> Result<()> {
         match find_and_connect() {
             Ok(stream) => {
                 log("DEVICE", "DEVICE".green(), "Connected to DHD device!");
+                connected.store(true, Ordering::SeqCst);
+                if let Some(handle) = tray_handle.as_ref() {
+                    let _ = handle.update(|_| {}).await;
+                }
+
                 let framed = Framed::new(stream, LinesCodec::new());
-                if let Err(e) = run_host(framed, pulse.clone(), &mut vol_rx, &mut sig_rx, &args).await {
+                if let Err(e) = run_host(
+                    framed,
+                    pulse.clone(),
+                    &mut vol_rx,
+                    &mut sig_rx,
+                    &args,
+                    &mode,
+                    &tray_handle,
+                )
+                .await
+                {
                     log("DEVICE", "DEVICE".red(), format!("Connection lost: {}", e));
+                }
+
+                connected.store(false, Ordering::SeqCst);
+                if let Some(handle) = tray_handle.as_ref() {
+                    let _ = handle.update(|_| {}).await;
                 }
             }
             Err(_) => {
@@ -380,6 +535,8 @@ async fn run_host(
     vol_rx: &mut Option<mpsc::UnboundedReceiver<f32>>,
     sig_rx: &mut Option<mpsc::UnboundedReceiver<()>>,
     args: &Args,
+    mode: &Arc<AtomicU32>,
+    tray_handle: &Option<ksni::Handle<DhdTray>>,
 ) -> Result<()> {
     // Initial handshake
     let handshake = IncomingMessage::Handshake {
@@ -422,7 +579,7 @@ async fn run_host(
                     OutgoingMessage::Log { .. }
                     | OutgoingMessage::Volume { .. }
                     | OutgoingMessage::Mode { .. } => {
-                        handle_message(msg, pulse.as_ref(), args);
+                        handle_message(msg, pulse.as_ref(), args, mode, tray_handle);
                     }
                     OutgoingMessage::Pong { .. } => {
                         // Ignore pongs during handshake phase
@@ -511,7 +668,7 @@ async fn run_host(
                                 missed_pings = 0;
                             }
                         } else {
-                            handle_message(msg, pulse.as_ref(), args);
+                            handle_message(msg, pulse.as_ref(), args, mode, tray_handle);
                         }
                     }
                     Err(e) => {
@@ -531,7 +688,13 @@ async fn run_host(
 }
 
 /// Dispatches an incoming `OutgoingMessage` to the appropriate display logic.
-fn handle_message(msg: OutgoingMessage, pulse: Option<&Arc<Mutex<PulseController>>>, args: &Args) {
+fn handle_message(
+    msg: OutgoingMessage,
+    pulse: Option<&Arc<Mutex<PulseController>>>,
+    args: &Args,
+    mode: &Arc<AtomicU32>,
+    tray_handle: &Option<ksni::Handle<DhdTray>>,
+) {
     match msg {
         OutgoingMessage::Volume { value } => {
             let bar_len = (value * 20.0).clamp(0.0, 20.0) as usize;
@@ -561,8 +724,15 @@ fn handle_message(msg: OutgoingMessage, pulse: Option<&Arc<Mutex<PulseController
             };
             log("LOG", "LOG".white(), format!("[{}] {}", lvl, message));
         }
-        OutgoingMessage::Mode { mode } => {
-            log("MODE", "MODE".magenta(), format!("{:?}", mode));
+        OutgoingMessage::Mode { mode: new_mode } => {
+            log("MODE", "MODE".magenta(), format!("{:?}", new_mode));
+            mode.store(new_mode as u32, Ordering::SeqCst);
+            if let Some(handle) = tray_handle {
+                let h = handle.clone();
+                tokio::spawn(async move {
+                    let _ = h.update(|_| {}).await;
+                });
+            }
         }
         OutgoingMessage::Pong { .. } => {}
         OutgoingMessage::Handshake { message } => {
