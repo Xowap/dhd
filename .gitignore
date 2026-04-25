@@ -16,3 +16,16 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# KiCad
+*.bak
+*.bck
+*.kicad_pcb-bak
+*.kicad_sch-bak
+*.kicad_prl
+*-backups/
+~*.lck
+.history/
+_autosave-*
+fp-info-cache/
+gerbers/
