@@ -68,6 +68,10 @@ pub struct PidCalibration {
 pub struct CalibrationResult {
     pub physical: PhysicalCalibration,
     pub pid: PidCalibration,
+    /// Whether the volume scale is inverted (hardware 100% = volume 0%).
+    /// Defaults to false for backward compatibility with existing stored data.
+    #[serde(default)]
+    pub inverted: bool,
 }
 
 impl CalibrationService {

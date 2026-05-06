@@ -12,7 +12,7 @@ pub mod utils;
 
 use core::sync::atomic::Ordering;
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either3, select3};
+use embassy_futures::select::{Either3, Either4, select3, select4};
 use embassy_rp::adc::InterruptHandler as AdcInterruptHandler;
 use embassy_rp::adc::{Adc, Channel, Config as AdcConfig};
 use embassy_rp::bind_interrupts;
@@ -36,6 +36,7 @@ use crate::fader::{
 };
 use crate::system::storage::{FLASH_SIZE, load_calibration, store_calibration};
 use crate::system::{STATE as SYSTEM, SystemMode, logger::LOGGER};
+use common::OutgoingMessage;
 use common::pid::{PidController, PidHardware};
 
 bind_interrupts!(struct Irqs {
@@ -136,8 +137,8 @@ async fn main(spawner: Spawner) {
 ///
 /// Waits for the initial handshake to complete with the host, ensuring the USB
 /// CDC-ACM connection is fully established. It then drains any pending outgoing
-/// messages before transitioning the system to the `Calibration` state to
-/// determine physical boundaries.
+/// messages (excluding the handshake sequence already queued) before
+/// transitioning the system to the `Standby` state.
 async fn handle_init() {
     SYSTEM.sig_handshake_done.wait().await;
     while COMMS.chan_outgoing.try_receive().is_ok() {}
@@ -212,27 +213,61 @@ async fn handle_calibration(
 /// - A host-requested calibration -> `Calibration`
 /// - A volume update from the host -> `LogicallyDriven`
 /// - Physical movement detected from the user -> `PhysicallyDriven`
+/// - A scale inversion toggle request -> toggles, persists, and reports
 async fn handle_standby(
     cal_svc: &mut CalibrationService,
     flash: &mut Flash<'_, FLASH, Async, FLASH_SIZE>,
 ) {
-    match select3(
+    match select4(
         SYSTEM.sig_start_calib.wait(),
         FADER.sig_target_vol_changed.wait(),
         FADER.sig_vol_changed.wait(),
+        SYSTEM.sig_invert_scale.wait(),
     )
     .await
     {
-        Either3::First(force) => {
+        Either4::First(force) => {
             handle_calibration(cal_svc, flash, force).await;
         }
-        Either3::Second(_) => {
+        Either4::Second(_) => {
             SYSTEM.set_mode(SystemMode::LogicallyDriven);
         }
-        Either3::Third(_) => {
+        Either4::Third(_) => {
             SYSTEM.set_mode(SystemMode::PhysicallyDriven);
         }
+        Either4::Fourth(_) => {
+            handle_invert_scale(flash).await;
+        }
     }
+}
+
+/// Toggles the scale inversion state, persists it to flash, and reports
+/// the new state to the host.
+///
+/// When scale inversion is enabled, a hardware reading of 100% maps to
+/// volume 0% and vice-versa. This setting is stored alongside calibration
+/// data in flash so it persists across reboots.
+async fn handle_invert_scale(flash: &mut Flash<'_, FLASH, Async, FLASH_SIZE>) {
+    let (new_inverted, cal_to_save) = {
+        let mut cal = FADER.calibration.lock().await;
+        cal.inverted = !cal.inverted;
+        log::info!(
+            "Scale inversion toggled: {}",
+            if cal.inverted { "ON" } else { "OFF" }
+        );
+        (cal.inverted, *cal)
+    };
+
+    store_calibration(flash, &cal_to_save).await;
+
+    let _ = COMMS
+        .chan_outgoing
+        .try_send(OutgoingMessage::ScaleInverted {
+            inverted: new_inverted,
+        });
+
+    // Trigger a volume re-read so the new inversion is immediately reflected
+    FADER.sig_range_updated.signal(());
 }
 
 /// Handles the logic for `LogicallyDriven` mode.

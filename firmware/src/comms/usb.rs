@@ -143,6 +143,12 @@ fn handle_incoming_packet(
                 .try_send(OutgoingMessage::Pong { timestamp });
         }
         Ok((IncomingMessage::Handshake { .. }, _)) => {
+            // Report scale inversion state before the handshake response so the
+            // host receives it during its handshake phase.
+            let inverted = fader.calibration.try_lock().map(|c| c.inverted).unwrap_or(false);
+            let _ = comms
+                .chan_outgoing
+                .try_send(OutgoingMessage::ScaleInverted { inverted });
             let mut res = heapless::String::<32>::new();
             let _ = core::fmt::write(&mut res, format_args!("Tek'ma'te Bra'tac"));
             let _ = comms
@@ -151,9 +157,14 @@ fn handle_incoming_packet(
             system.sig_handshake_done.signal(());
         }
         Ok((IncomingMessage::StartCalibration { volume, force }, _)) => {
+            let vol = if fader.calibration.try_lock().map(|c| c.inverted).unwrap_or(false) {
+                1.0 - volume
+            } else {
+                volume
+            };
             fader
                 .target_volume_ppm
-                .store((volume * 1_000_000.0) as u32, Ordering::Relaxed);
+                .store((vol * 1_000_000.0) as u32, Ordering::Relaxed);
             system.sig_start_calib.signal(force);
         }
         Ok((IncomingMessage::UpdateCalibration { bottom, top }, _)) => {
@@ -164,10 +175,18 @@ fn handle_incoming_packet(
             fader.sig_range_updated.signal(());
         }
         Ok((IncomingMessage::SetVolume { value }, _)) => {
+            let vol = if fader.calibration.try_lock().map(|c| c.inverted).unwrap_or(false) {
+                1.0 - value
+            } else {
+                value
+            };
             fader
                 .target_volume_ppm
-                .store((value * 1_000_000.0) as u32, Ordering::Relaxed);
+                .store((vol * 1_000_000.0) as u32, Ordering::Relaxed);
             fader.sig_target_vol_changed.signal(());
+        }
+        Ok((IncomingMessage::InvertScale, _)) => {
+            system.sig_invert_scale.signal(());
         }
         _ => {}
     }

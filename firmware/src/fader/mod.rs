@@ -51,6 +51,7 @@ impl FaderState {
                     alpha: 0.0,
                     deadband: 0.0,
                 },
+                inverted: false,
             }),
             sig_raw_changed: Signal::new(),
             sig_stable_raw_changed: Signal::new(),

@@ -65,6 +65,12 @@ pub enum OutgoingMessage {
         /// The response message.
         message: heapless::String<32>,
     },
+    /// Reports whether the scale is currently inverted.
+    #[serde(rename = "scale_inverted")]
+    ScaleInverted {
+        /// True if the scale is inverted (hardware 100% = volume 0%).
+        inverted: bool,
+    },
 }
 
 /// Messages received by the device from the host.
@@ -105,4 +111,8 @@ pub enum IncomingMessage {
         /// Normalized volume value (0.0 to 1.0).
         value: f32,
     },
+    /// Toggles scale inversion on the device.
+    /// When inverted, hardware 100% reads as volume 0% and vice-versa.
+    #[serde(rename = "invert_scale")]
+    InvertScale,
 }

@@ -105,7 +105,9 @@ struct PulseController {
 struct DhdTray {
     connected: bool,
     mode: SystemMode,
+    inverted: bool,
     sig_tx: mpsc::UnboundedSender<()>,
+    invert_tx: mpsc::UnboundedSender<()>,
 }
 
 impl ksni::Tray for DhdTray {
@@ -179,6 +181,16 @@ impl ksni::Tray for DhdTray {
                 enabled: self.connected,
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.sig_tx.send(());
+                }),
+                ..Default::default()
+            }
+            .into(),
+            CheckmarkItem {
+                label: "Invert Scale".into(),
+                enabled: self.connected,
+                checked: self.inverted,
+                activate: Box::new(|this: &mut Self| {
+                    let _ = this.invert_tx.send(());
                 }),
                 ..Default::default()
             }
@@ -520,11 +532,14 @@ X-GNOME-Autostart-enabled=true
 async fn run(args: Cli) -> Result<()> {
     println!("{}", "=== DHD Host Starting ===".bold().cyan());
     let (sig_tx, sig_rx) = mpsc::unbounded_channel();
+    let (invert_tx, invert_rx) = mpsc::unbounded_channel();
     let tray_handle = if args.systray {
         let tray = DhdTray {
             connected: false,
             mode: SystemMode::Init,
+            inverted: false,
             sig_tx: sig_tx.clone(),
+            invert_tx: invert_tx.clone(),
         };
         Some(tray.spawn().await.expect("Failed to spawn tray"))
     } else {
@@ -562,7 +577,20 @@ async fn run(args: Cli) -> Result<()> {
             let _ = sig_tx_clone.send(());
         }
     });
+    let mut sig_usr2 = signal(SignalKind::user_defined2())?;
+    let invert_tx_clone = invert_tx.clone();
+    tokio::spawn(async move {
+        while sig_usr2.recv().await.is_some() {
+            log(
+                "HOST",
+                "HOST".yellow(),
+                "Received SIGUSR2 - Toggling scale inversion",
+            );
+            let _ = invert_tx_clone.send(());
+        }
+    });
     let mut sig_rx_opt = Some(sig_rx);
+    let mut invert_rx_opt = Some(invert_rx);
     loop {
         match find_and_connect() {
             Ok(stream) => {
@@ -580,6 +608,7 @@ async fn run(args: Cli) -> Result<()> {
                     pulse.clone(),
                     &mut vol_rx,
                     &mut sig_rx_opt,
+                    &mut invert_rx_opt,
                     &args,
                     &tray_handle,
                 )
@@ -622,6 +651,7 @@ async fn run_host(
     pulse: Option<Arc<Mutex<PulseController>>>,
     vol_rx: &mut Option<mpsc::UnboundedReceiver<f32>>,
     sig_rx: &mut Option<mpsc::UnboundedReceiver<()>>,
+    invert_rx: &mut Option<mpsc::UnboundedReceiver<()>>,
     args: &Cli,
     tray_handle: &Option<ksni::Handle<DhdTray>>,
 ) -> Result<()> {
@@ -674,6 +704,9 @@ async fn run_host(
             Some(_) = async { if let Some(rx) = sig_rx.as_mut() { rx.recv().await } else { futures::future::pending().await } } => {
                 let vol = pulse.as_ref().and_then(|p| p.lock().ok()).map(|p| p.get_volume()).unwrap_or(0.5);
                 framed.send(serde_json::to_string(&IncomingMessage::StartCalibration { volume: vol, force: true })?).await?;
+            }
+            Some(_) = async { if let Some(rx) = invert_rx.as_mut() { rx.recv().await } else { futures::future::pending().await } } => {
+                framed.send(serde_json::to_string(&IncomingMessage::InvertScale)?).await?;
             }
             line = framed.next() => {
                 let line = match line { Some(Ok(l)) => l, Some(Err(e)) => return Err(e.into()), None => return Err(anyhow::anyhow!("EOF")), };
@@ -733,6 +766,23 @@ async fn handle_message(
                 let _ = handle
                     .update(|tray| {
                         tray.mode = new_mode;
+                    })
+                    .await;
+            }
+        }
+        OutgoingMessage::ScaleInverted { inverted } => {
+            log(
+                "SCALE",
+                "SCALE".cyan(),
+                format!(
+                    "Scale inversion: {}",
+                    if inverted { "ON (inverted)" } else { "OFF (normal)" }
+                ),
+            );
+            if let Some(handle) = tray_handle {
+                let _ = handle
+                    .update(|tray| {
+                        tray.inverted = inverted;
                     })
                     .await;
             }

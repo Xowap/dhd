@@ -11,6 +11,8 @@ pub struct SystemState {
     mode: AtomicU32,
     /// Fired when the host or system requests a calibration run.
     pub sig_start_calib: Signal<CriticalSectionRawMutex, bool>,
+    /// Fired when the host requests toggling scale inversion.
+    pub sig_invert_scale: Signal<CriticalSectionRawMutex, ()>,
     /// Fired when the initial handshake with the host is completed.
     pub sig_handshake_done: Signal<CriticalSectionRawMutex, ()>,
     /// Fired when the system mode has changed.
@@ -22,6 +24,7 @@ impl SystemState {
         Self {
             mode: AtomicU32::new(SystemMode::Init as u32),
             sig_start_calib: Signal::new(),
+            sig_invert_scale: Signal::new(),
             sig_handshake_done: Signal::new(),
             sig_mode_changed: Signal::new(),
         }

@@ -13,6 +13,9 @@ use micromath::F32Ext;
 /// stored in `volume_ppm`. Finally, it emits `sig_vol_changed` to alert the
 /// rest of the system (like the orchestrator or the reporter task) that a new,
 /// processed logical volume is available.
+///
+/// If scale inversion is enabled, the normalized value is flipped (1.0 - norm)
+/// so that hardware 100% reads as volume 0% and vice-versa.
 #[embassy_executor::task]
 pub async fn fader_task(state: &'static FaderState) {
     let mut last_raw = 0u16;
@@ -29,13 +32,13 @@ pub async fn fader_task(state: &'static FaderState) {
             embassy_futures::select::Either::Second(_) => { /* Range updated in state */ }
         }
 
-        let norm = state
-            .calibration
-            .lock()
-            .await
-            .physical
-            .boundaries
-            .interpolate(last_raw);
+        let (norm, inverted) = {
+            let cal = state.calibration.lock().await;
+            let n = cal.physical.boundaries.interpolate(last_raw);
+            (n, cal.inverted)
+        };
+
+        let norm = if inverted { 1.0 - norm } else { norm };
 
         // Round to nearest percent at the output of the filter
         let rounded_ppm = ((norm * 100.0).round() * 10_000.0) as u32;
