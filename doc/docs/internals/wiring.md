@@ -69,24 +69,24 @@ let channel = Channel::new_pin(p.PIN_26, embassy_rp::gpio::Pull::None);
 
 ```
                     ┌─────────────────────┐
-                    │  Raspberry Pi Pico 2 │
+                    │ Raspberry Pi Pico 2 │
                     │                     │
-    3.3V (Pin 36) ─┤─── EEP (DRV8833)    │
+     3.3V (Pin 36) ─┤─── EEP (DRV8833)    │
                     │                     │
-   VBUS (Pin 40) ─┤─── VM  (DRV8833)    │
+     VBUS (Pin 40) ─┤─── VM  (DRV8833)    │
                     │                     │
-    GND (Pin 38) ──┤─── GND (DRV8833)    │
+     GND (Pin 38) ──┤─── GND (DRV8833)    │
                     │                     │
-   GP14 (Pin 19) ──┤─── IN1 (DRV8833)    │──── OUT1 ──┐
-                    │                     │             │ Motor
-   GP15 (Pin 20) ──┤─── IN2 (DRV8833)    │──── OUT2 ──┘
+    GP14 (Pin 19) ──┤─── IN1 (DRV8833)    │──── OUT1 ──┐
+                    │                     │            │ Motor
+    GP15 (Pin 20) ──┤─── IN2 (DRV8833)    │──── OUT2 ──┘
                     │                     │
-   GP26 (Pin 31) ──┤─── Wiper (Pot)      │
+    GP26 (Pin 31) ──┤─── Wiper (Pot)      │
                     │                     │
-   AGND (Pin 33) ──┤─── GND   (Pot)      │
+    AGND (Pin 33) ──┤─── GND   (Pot)      │
                     │                     │
-    3.3V (Pin 36) ─┤─── VCC   (Pot)      │
+     3.3V (Pin 36) ─┤─── VCC   (Pot)      │
                     │                     │
-         USB ──────┤ Power + CDC-ACM      │
+          USB ──────┤ Power + CDC-ACM     │
                     └─────────────────────┘
 ```
