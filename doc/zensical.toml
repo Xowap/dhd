@@ -1,0 +1,56 @@
+[project]
+site_name = "DHD — Dial Hifi Device"
+site_url = "https://offworld-nexus-dhd.surge.sh"
+site_description = "A physical motorized fader for seamless computer volume control"
+repo_url = "https://github.com/Xowap/dhd"
+repo_name = "Xowap/dhd"
+
+nav = [
+    {"Home" = "index.md"},
+    {"Assembly" = [
+        "assembly/index.md",
+        {"Bill of Materials" = "assembly/bom.md"},
+        {"PCB & Soldering" = "assembly/pcb.md"},
+        {"3D Printing" = "assembly/printing.md"},
+        {"Physical Assembly" = "assembly/steps.md"},
+        {"GEN2 Integration" = "assembly/gen2.md"},
+    ]},
+    {"Host Software" = [
+        {"Installation" = "host/installation.md"},
+        {"Usage" = "host/usage.md"},
+        {"Protocol Reference" = "host/protocol.md"},
+    ]},
+    {"Internals" = [
+        {"PID Control System" = "internals/pid.md"},
+        {"Motor Driver (DRV8833)" = "internals/drv8833.md"},
+        {"Wiring Reference" = "internals/wiring.md"},
+    ]},
+]
+
+markdown_extensions = [
+    "admonition",
+    "tables",
+    "attr_list",
+    "md_in_html",
+    "pymdownx.highlight",
+    "pymdownx.superfences",
+    "pymdownx.tabbed",
+]
+
+[project.theme]
+name = "material"
+palette = [
+    { scheme = "default", primary = "deep purple", accent = "amber", toggle = { icon = "material/brightness-7", name = "Switch to dark mode" } },
+    { scheme = "slate", primary = "deep purple", accent = "amber", toggle = { icon = "material/brightness-4", name = "Switch to light mode" } },
+]
+features = [
+    "navigation.sections",
+    "navigation.expand",
+    "navigation.indexes",
+    "navigation.top",
+    "content.code.copy",
+]
+icon = { repo = "fontawesome/brands/github" }
+
+[[project.plugins]]
+name = "search"

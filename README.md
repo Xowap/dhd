@@ -1,101 +1,83 @@
-# DHD - Dial Hifi Device
+# DHD — Dial Hifi Device
 
-DHD is a physical media controller for computers. It provides tactile control
-over volume and media playback, featuring a high-quality potentiometer interface
-and a Linux-native host tool for seamless integration.
+<p align="center">
+  <img src="doc/img/final_product_open.jpg" alt="DHD — a physical motorized fader for computer volume control" width="500">
+</p>
 
-## Project Structure
+<p align="center">
+  <strong>A physical motorized fader for seamless computer volume control.</strong>
+</p>
 
-This project is organized as a Cargo workspace:
+<p align="center">
+  <a href="https://offworld-nexus-dhd.surge.sh">Documentation</a> ·
+  <a href="https://offworld-nexus-dhd.surge.sh/assembly/">Assembly Guide</a> ·
+  <a href="https://github.com/Xowap/dhd/tree/master/hardware/stl">STL Files</a>
+</p>
 
-- **`common/`**: Shared library containing the JSON protocol definitions used by
-  both the firmware and the host.
-- **`firmware/`**: The embedded Rust firmware for the Raspberry Pi Pico 2
-  (RP2350), built with the Embassy async framework.
-- **`host/`**: A Linux terminal application (`dhd`) that communicates with the
-  device, displays real-time volume updates, and monitors device health.
+---
 
-## Hardware Requirements
+Move the fader by hand to adjust volume. Change volume from your computer and
+watch the fader glide to match. Bidirectional, seamless, satisfying.
 
-- **Microcontroller**: Raspberry Pi Pico 2 (RP2350).
-- **Control**: A 10k (or similar) analog potentiometer.
-- **Wiring**: See [doc/wiring.md](doc/wiring.md) for detailed connection
-  instructions.
+The DHD uses a **Bourns PSL60 motorized fader** with a PID-controlled DC motor,
+driven by a **Raspberry Pi Pico 2** and a **DRV8833 motor driver**. The host
+daemon on Linux integrates with PulseAudio/PipeWire for system volume control.
 
-## Getting Started
-
-### 1. Build and Flash the Firmware
-
-You will need the `thumbv8m.main-none-eabihf` target installed:
-
-```bash
-rustup target add thumbv8m.main-none-eabihf
-```
-
-To build and flash the device (requires `picotool`):
-
-```bash
-cd firmware
-cargo run --release
-```
-
-_Note: The firmware automatically targets the RP2350 and handles linker
-configurations via its internal `build.rs`._
-
-### 2. Run the Host Tool
-
-The host tool runs on your Linux machine and automatically detects the DHD when
-it is plugged in.
-
-From the project root:
-
-```bash
-cargo run -p dhd
-```
-
-#### Command-Line Arguments
-
-The host tool accepts several arguments:
-
-- `-l, --log-level <LEVEL>`: Set the log level for the device (ERROR, WARN,
-  INFO, DEBUG, TRACE). Default is INFO.
-- `-s, --systray`: Enable the system tray icon and detach from the terminal.
-
-#### Subcommands
-
-- `run`: Run the DHD host (default).
-- `install`: Install the DHD host to autostart and the system menu.
-
-#### Commands & Signals
-
-- **SIGUSR1**: Send `SIGUSR1` to the `dhd` process to trigger a **Hard
-  Re-calibration**. This will force the device to re-measure its physical
-  boundaries and re-tune the PID controller, even if valid data is already
-  stored in flash.
-    ```bash
-    kill -USR1 $(pgid dhd)
-    ```
-
-_Note: On first connection, the host automatically requests a "soft"
-calibration, which only runs if the device has never been calibrated._
+The enclosure is designed as a **GEN2 drawer** — it slides directly into the
+[GEN2 modular system](https://www.jerrari3d.com/gen2-modular-system) with no
+custom fixation needed.
 
 ## Features
 
-- **System Audio Integration**: Automatically synchronizes with
-  PulseAudio/PipeWire, providing precise control over the host's default audio
-  sink.
-- **Responsive Volume Control**: Uses ADC sampling with median filtering and
-  hysteresis for a smooth, jitter-free experience.
-- **Event-Driven Architecture**: The host tool uses an asynchronous,
-  non-blocking design (Tokio) to ensure low latency and minimal CPU usage.
-- **Auto-Discovery**: The host tool automatically scans USB ports and reconnects
-  to the device if it's unplugged.
-- **JSON Protocol**: Bi-directional communication allowing for complex commands
-  and telemetry.
-- **Persistent Calibration**: Calibration results (physical boundaries and PID
-  parameters) are stored in the device's flash memory, avoiding the need for
-  re-calibration on every boot.
-- **Remote Logging**: Device logs are sent as JSON over USB and rendered clearly
-  in the host terminal.
-- **Health Monitoring**: Periodic ping/pong mechanism to ensure the link is
-  active.
+- **Bidirectional control** — physical fader ↔ software volume, always in sync
+- **Auto-calibration** — PID controller tunes itself to your hardware
+- **GEN2 compatible** — standard drawer form factor, mounts in seconds
+- **Plug and play** — USB auto-discovery, no configuration needed
+- **Persistent** — calibration saved to flash, survives reboots
+
+## Quick Start
+
+See the full [documentation](https://offworld-nexus-dhd.surge.sh) for detailed
+assembly and installation instructions.
+
+```bash
+# Clone
+git clone https://github.com/Xowap/dhd.git
+cd dhd
+
+# Flash firmware (hold BOOTSEL while plugging in Pico)
+rustup target add thumbv8m.main-none-eabihf
+cd firmware && cargo run --release && cd ..
+
+# Install host daemon
+cd host && cargo run --release -- install && cd ..
+```
+
+## Project Structure
+
+```
+dhd/
+├── common/      # Shared library — protocol + PID controller (no_std)
+├── firmware/    # Embassy async firmware for RP2350
+├── host/        # Linux host daemon (Tokio + PulseAudio + systray)
+├── simulator/   # TUI PID simulator for tuning without hardware
+├── hardware/
+│   ├── kicad/   # PCB schematics
+│   └── stl/     # 3D printable parts
+└── doc/         # Documentation source (Zensical)
+```
+
+## Documentation
+
+The full documentation is published at
+**[offworld-nexus-dhd.surge.sh](https://offworld-nexus-dhd.surge.sh)** and
+covers:
+
+- Assembly instructions (BOM, PCB, 3D printing, step-by-step)
+- Host software reference (installation, usage, protocol)
+- Internals (PID control, motor driver, wiring)
+
+## License
+
+This project is open source. Hardware (KiCad + STL), firmware, and host software
+are all available in this repository.

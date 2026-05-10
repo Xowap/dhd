@@ -29,3 +29,9 @@ Thumbs.db
 _autosave-*
 fp-info-cache/
 gerbers/
+
+# Documentation build (Zensical)
+doc/site/
+doc/.venv/
+doc/uv.lock
+doc/__pycache__/
