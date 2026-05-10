@@ -2,7 +2,7 @@
 
 My understanding is that there are many ways to do this, however here is how I did it.
 
-Within the source code, under the [`hardware/kicad`](https://github.com/Xowap/dhd/tree/master/hardware/kicad) folder, you can find the schematics for the PCB, to be opened in the free software [KiCad](https://www.kicad.org/).
+Within the source code, under the [`hardware/kicad`](https://github.com/Xowap/dhd/tree/develop/hardware/kicad) folder, you can find the schematics for the PCB, to be opened in the free software [KiCad](https://www.kicad.org/).
 
 ## Building the Board
 
@@ -11,7 +11,7 @@ Within the source code, under the [`hardware/kicad`](https://github.com/Xowap/dh
 
 Then, up to you. If you know how to do this chemically or with a laser or whatever the cool kids do, knock yourself out. In my case, I decided to order it from PCBWay, because it's much easier. Here are the steps that I followed:
 
-1. Open the PCB in KiCad (the project is in [`hardware/kicad/`](https://github.com/Xowap/dhd/tree/master/hardware/kicad))
+1. Open the PCB in KiCad (the project is in [`hardware/kicad/`](https://github.com/Xowap/dhd/tree/develop/hardware/kicad))
 
 2. Export Gerber files:
 

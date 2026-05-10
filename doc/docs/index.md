@@ -54,7 +54,7 @@ All parts are designed for the GEN2 modular drawer system:
 
     The base structure and GEN2 compatibility layer.
 
-    [:octicons-download-16: Download STL](https://github.com/Xowap/dhd/raw/master/hardware/stl/DHD_Drawer.stl)
+    [:octicons-download-16: Download STL](https://github.com/Xowap/dhd/raw/develop/hardware/stl/DHD_Drawer.stl)
 
 - ![Facade](img/stl/DHD_Facade.png)
 
@@ -62,7 +62,7 @@ All parts are designed for the GEN2 modular drawer system:
 
     The main component holding the fader.
 
-    [:octicons-download-16: Download STL](https://github.com/Xowap/dhd/raw/master/hardware/stl/DHD_Facade.stl)
+    [:octicons-download-16: Download STL](https://github.com/Xowap/dhd/raw/develop/hardware/stl/DHD_Facade.stl)
 
 - ![Knob](img/stl/DHD_Knob.png)
 
@@ -70,7 +70,7 @@ All parts are designed for the GEN2 modular drawer system:
 
     Studio-style knob for comfortable control.
 
-    [:octicons-download-16: Download STL](https://github.com/Xowap/dhd/raw/master/hardware/stl/DHD_Knob.stl)
+    [:octicons-download-16: Download STL](https://github.com/Xowap/dhd/raw/develop/hardware/stl/DHD_Knob.stl)
 
 - ![Panel Left](img/stl/DHD_Panel_Left.png)
 
@@ -78,7 +78,7 @@ All parts are designed for the GEN2 modular drawer system:
 
     Cosmetic panels to close off the sides.
 
-    [:octicons-download-16: Left](https://github.com/Xowap/dhd/raw/master/hardware/stl/DHD_Panel_Left.stl) ·
-    [:octicons-download-16: Right](https://github.com/Xowap/dhd/raw/master/hardware/stl/DHD_Panel_Right.stl)
+    [:octicons-download-16: Left](https://github.com/Xowap/dhd/raw/develop/hardware/stl/DHD_Panel_Left.stl) ·
+    [:octicons-download-16: Right](https://github.com/Xowap/dhd/raw/develop/hardware/stl/DHD_Panel_Right.stl)
 
 </div>

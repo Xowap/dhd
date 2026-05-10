@@ -13,10 +13,10 @@ We have there to print the following parts:
 
 | Part | Preview | STL | Purpose |
 |------|---------|-----|---------|
-| **Drawer** | ![](../img/stl/DHD_Drawer.png){ width="120" } | [:octicons-download-16: Download](https://github.com/Xowap/dhd/raw/master/hardware/stl/DHD_Drawer.stl) | The support structure for everything on top of being the compatibility layer with GEN2 |
-| **Facade** | ![](../img/stl/DHD_Facade.png){ width="120" } | [:octicons-download-16: Download](https://github.com/Xowap/dhd/raw/master/hardware/stl/DHD_Facade.stl) | The main component, and for which you could create a different support system if you don't like GEN2 (all you need is 4 holes and somewhere to put the PCB) |
-| **Side Panels** | ![](../img/stl/DHD_Panel_Left.png){ width="120" } | [:octicons-download-16: Left](https://github.com/Xowap/dhd/raw/master/hardware/stl/DHD_Panel_Left.stl) · [:octicons-download-16: Right](https://github.com/Xowap/dhd/raw/master/hardware/stl/DHD_Panel_Right.stl) | Only here for cosmetic reasons and close up the sides of the facade. Albeit technically optional, I don't really see the point of not printing them |
-| **Knob** | ![](../img/stl/DHD_Knob.png){ width="120" } | [:octicons-download-16: Download](https://github.com/Xowap/dhd/raw/master/hardware/stl/DHD_Knob.stl) | You put it on the sliding part of the fader, and gives you a studio feel (or at least is more comfortable to use than a rectangular piece of metal) |
+| **Drawer** | ![](../img/stl/DHD_Drawer.png){ width="120" } | [:octicons-download-16: Download](https://github.com/Xowap/dhd/raw/develop/hardware/stl/DHD_Drawer.stl) | The support structure for everything on top of being the compatibility layer with GEN2 |
+| **Facade** | ![](../img/stl/DHD_Facade.png){ width="120" } | [:octicons-download-16: Download](https://github.com/Xowap/dhd/raw/develop/hardware/stl/DHD_Facade.stl) | The main component, and for which you could create a different support system if you don't like GEN2 (all you need is 4 holes and somewhere to put the PCB) |
+| **Side Panels** | ![](../img/stl/DHD_Panel_Left.png){ width="120" } | [:octicons-download-16: Left](https://github.com/Xowap/dhd/raw/develop/hardware/stl/DHD_Panel_Left.stl) · [:octicons-download-16: Right](https://github.com/Xowap/dhd/raw/develop/hardware/stl/DHD_Panel_Right.stl) | Only here for cosmetic reasons and close up the sides of the facade. Albeit technically optional, I don't really see the point of not printing them |
+| **Knob** | ![](../img/stl/DHD_Knob.png){ width="120" } | [:octicons-download-16: Download](https://github.com/Xowap/dhd/raw/develop/hardware/stl/DHD_Knob.stl) | You put it on the sliding part of the fader, and gives you a studio feel (or at least is more comfortable to use than a rectangular piece of metal) |
 
 ## Color Strategy
 

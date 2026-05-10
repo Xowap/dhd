@@ -1,6 +1,6 @@
 # Construction Guide
 
-The Dial Hifi Device (DHD) is a DIY device which allows you to control the volume on your computer through a physical fader, which is mounted as the facade of a drawer for the GEN2 system. Obviously it's built with the parts that *I* have at hands, and building it for your own constraints might require to modify some things. Overall everything is open sourced: you have access to the [Onshape document](https://cad.onshape.com/documents/e0a1011ad933c9838ad313ca/w/9072f4ad6800d0c6b8320443/e/6ad28f5df8e4bbfb02ddf18f?renderMode=0&uiState=69ffd1ceabeaa0112793777b), the [KiCad schematics](https://github.com/Xowap/dhd/tree/master/hardware/kicad) and the [Rust source code](https://github.com/Xowap/dhd) for the computer program.
+The Dial Hifi Device (DHD) is a DIY device which allows you to control the volume on your computer through a physical fader, which is mounted as the facade of a drawer for the GEN2 system. Obviously it's built with the parts that *I* have at hands, and building it for your own constraints might require to modify some things. Overall everything is open sourced: you have access to the [Onshape document](https://cad.onshape.com/documents/e0a1011ad933c9838ad313ca/w/9072f4ad6800d0c6b8320443/e/6ad28f5df8e4bbfb02ddf18f?renderMode=0&uiState=69ffd1ceabeaa0112793777b), the [KiCad schematics](https://github.com/Xowap/dhd/tree/develop/hardware/kicad) and the [Rust source code](https://github.com/Xowap/dhd) for the computer program.
 
 ![Assembly overview](../img/assembly-view.png){ width="500" }
 

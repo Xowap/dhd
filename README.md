@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://offworld-nexus-dhd.surge.sh">Documentation</a> ·
   <a href="https://offworld-nexus-dhd.surge.sh/assembly/">Assembly Guide</a> ·
-  <a href="https://github.com/Xowap/dhd/tree/master/hardware/stl">STL Files</a>
+  <a href="https://github.com/Xowap/dhd/tree/develop/hardware/stl">STL Files</a>
 </p>
 
 ---

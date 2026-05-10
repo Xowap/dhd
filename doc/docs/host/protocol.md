@@ -2,7 +2,7 @@
 
 The DHD uses a JSON-based protocol over USB CDC-ACM (virtual serial port) for
 communication between firmware and host. The message types are defined in
-[`common/src/lib.rs`](https://github.com/Xowap/dhd/blob/master/common/src/lib.rs).
+[`common/src/lib.rs`](https://github.com/Xowap/dhd/blob/develop/common/src/lib.rs).
 
 ## Transport
 
