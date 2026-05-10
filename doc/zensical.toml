@@ -5,6 +5,11 @@ site_description = "A physical motorized fader for seamless computer volume cont
 repo_url = "https://github.com/Xowap/dhd"
 repo_name = "Xowap/dhd"
 
+extra_javascript = [
+    "javascripts/mathjax.js",
+    "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js",
+]
+
 nav = [
     {"Home" = "index.md"},
     {"Assembly" = [
@@ -27,30 +32,42 @@ nav = [
     ]},
 ]
 
-markdown_extensions = [
-    "admonition",
-    "tables",
-    "attr_list",
-    "md_in_html",
-    "pymdownx.highlight",
-    "pymdownx.superfences",
-    "pymdownx.tabbed",
-]
-
 [project.theme]
 name = "material"
 palette = [
-    { scheme = "default", primary = "deep purple", accent = "amber", toggle = { icon = "material/brightness-7", name = "Switch to dark mode" } },
-    { scheme = "slate", primary = "deep purple", accent = "amber", toggle = { icon = "material/brightness-4", name = "Switch to light mode" } },
+    { scheme = "default", primary = "deep purple", accent = "amber", toggle = { icon = "lucide/sun", name = "Switch to dark mode" } },
+    { scheme = "slate", primary = "deep purple", accent = "amber", toggle = { icon = "lucide/moon", name = "Switch to light mode" } },
 ]
 features = [
     "navigation.sections",
     "navigation.expand",
     "navigation.indexes",
     "navigation.top",
+    "navigation.footer",
     "content.code.copy",
 ]
 icon = { repo = "fontawesome/brands/github" }
 
 [[project.plugins]]
 name = "search"
+
+
+[project.markdown_extensions.admonition]
+[project.markdown_extensions.tables]
+[project.markdown_extensions.attr_list]
+[project.markdown_extensions.md_in_html]
+[project.markdown_extensions.toc]
+permalink = true
+[project.markdown_extensions.pymdownx.arithmatex]
+generic = true
+[project.markdown_extensions.pymdownx.emoji]
+emoji_generator = "zensical.extensions.emoji.to_svg"
+emoji_index = "zensical.extensions.emoji.twemoji"
+[project.markdown_extensions.pymdownx.highlight]
+anchor_linenums = true
+[project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+    { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" }
+]
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true

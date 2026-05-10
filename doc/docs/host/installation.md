@@ -20,7 +20,7 @@ git clone https://github.com/Xowap/dhd.git
 cd dhd
 ```
 
-Then install the toolchain for cross-compilation:
+Then install the toolchain for cross-compilation (needed for the [`firmware/`](https://github.com/Xowap/dhd/tree/master/firmware)):
 
 ```bash
 rustup target add thumbv8m.main-none-eabihf

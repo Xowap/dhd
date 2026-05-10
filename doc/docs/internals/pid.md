@@ -36,7 +36,7 @@ The calibration identifies two key parameters:
 
 ## Controller Architecture
 
-Implemented in `common/src/pid/controller.rs` as a modified PD+I loop.
+Implemented in [`common/src/pid/controller.rs`](https://github.com/Xowap/dhd/blob/master/common/src/pid/controller.rs) as a modified PD+I loop.
 
 ### Derivative-on-Measurement
 
@@ -77,7 +77,7 @@ error.
 
 ## Auto-Calibration
 
-Implemented in `common/src/pid/calibration.rs`. Fully hardware-agnostic.
+Implemented in [`common/src/pid/calibration.rs`](https://github.com/Xowap/dhd/blob/master/common/src/pid/calibration.rs). Fully hardware-agnostic.
 
 ### Phase 1 — System Identification
 

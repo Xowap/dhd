@@ -2,7 +2,7 @@
 
 This document describes the physical connections between the Raspberry Pi Pico 2
 (RP2350) and the hardware components, as defined in the KiCad schematic
-(`hardware/kicad/dhd.kicad_sch`).
+([`hardware/kicad/dhd.kicad_sch`](https://github.com/Xowap/dhd/blob/master/hardware/kicad/dhd.kicad_sch)).
 
 ## Potentiometer (J2 — 4-pin JST-XH)
 
@@ -55,7 +55,7 @@ The Pico's USB port provides:
 
 ## Firmware Pin Configuration
 
-Confirmed in `firmware/src/main.rs`:
+Confirmed in [`firmware/src/main.rs`](https://github.com/Xowap/dhd/blob/master/firmware/src/main.rs):
 
 ```rust
 // PWM motor control on Slice 7

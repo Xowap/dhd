@@ -2,7 +2,7 @@
 
 My understanding is that there are many ways to do this, however here is how I did it.
 
-Within the source code, under the `hardware/kicad` folder, you can find the schematics for the PCB, to be opened in the free software [KiCad](https://www.kicad.org/).
+Within the source code, under the [`hardware/kicad`](https://github.com/Xowap/dhd/tree/master/hardware/kicad) folder, you can find the schematics for the PCB, to be opened in the free software [KiCad](https://www.kicad.org/).
 
 ## Building the Board
 
@@ -11,13 +11,23 @@ Within the source code, under the `hardware/kicad` folder, you can find the sche
 
 Then, up to you. If you know how to do this chemically or with a laser or whatever the cool kids do, knock yourself out. In my case, I decided to order it from PCBWay, because it's much easier. Here are the steps that I followed:
 
-1. Open the PCB in KiCad
+1. Open the PCB in KiCad (the project is in [`hardware/kicad/`](https://github.com/Xowap/dhd/tree/master/hardware/kicad))
 
-2. Export Gerber files
+2. Export Gerber files:
 
-3. Export drill files
+    - Go to **File → Fabrication Outputs → Gerbers (.gbr)...**
+    - Output directory: `gerbers/` (or any folder you like)
+    - Make sure all layers are checked (F.Cu, B.Cu, F.Mask, B.Mask, F.Silkscreen, B.Silkscreen, Edge.Cuts, F.Paste, B.Paste)
+    - Click **Plot**
 
-4. Put all those files at the root of a `.zip`
+3. Export drill files:
+
+    - Still in the Gerber dialog, click **Generate Drill Files...**
+    - Format: **Excellon**
+    - Drill origin: **Absolute**
+    - Click **Generate Drill File**
+
+4. Put all those files (`.gbr` + `.drl`) at the root of a `.zip`
 
 5. Go to PCBWay and use the [PCB Quick Order](https://www.pcbway.com/QuickOrderOnline.aspx) feature, which allows to directly upload this zip file and will deduce key parameters from it automatically (instead of having to fill them up manually, which is subtly different from the default form you'll get from the menu)
 
